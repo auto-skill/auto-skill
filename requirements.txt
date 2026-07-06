@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+httpx
+ddgs
+numpy
+onnxruntime
+tokenizers
+huggingface_hub

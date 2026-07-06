@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Claude Skill Scraper</title>
+<style>
+  body { font-family: monospace; background: #0d0d0d; color: #ccc; margin: 20px; }
+  h1 { color: #fff; margin-bottom: 4px; }
+  .controls { margin: 16px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button { background: #1a1a2e; color: #7eb8f7; border: 1px solid #7eb8f7; padding: 8px 18px; cursor: pointer; font-family: monospace; font-size: 14px; }
+  button:hover { background: #7eb8f7; color: #0d0d0d; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #status { font-size: 13px; color: #888; }
+  #status span { color: #7eb8f7; }
+  select { background: #1a1a2e; color: #ccc; border: 1px solid #444; padding: 7px; font-family: monospace; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  th { text-align: left; border-bottom: 1px solid #333; padding: 6px 8px; color: #888; text-transform: uppercase; font-size: 11px; }
+  td { padding: 6px 8px; border-bottom: 1px solid #1c1c1c; vertical-align: top; max-width: 300px; word-break: break-word; }
+  td a { color: #7eb8f7; text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  .tag { display: inline-block; background: #1a2a1a; color: #6fcf6f; border: 1px solid #2a4a2a; padding: 1px 6px; margin: 1px; font-size: 11px; border-radius: 2px; }
+  .badge { display: inline-block; padding: 1px 7px; font-size: 11px; border-radius: 2px; }
+  .badge-github { background: #161b22; color: #58a6ff; border: 1px solid #30363d; }
+  .badge-npm { background: #1a0a00; color: #cc3b1a; border: 1px solid #3a1a00; }
+  .badge-smithery { background: #0a1a0a; color: #6fcf6f; border: 1px solid #1a3a1a; }
+  .badge-glama { background: #1a0a1a; color: #bf7fbf; border: 1px solid #3a1a3a; }
+  .badge-anthropic { background: #1a1000; color: #d4a017; border: 1px solid #3a2800; }
+  .badge-pulsemcp { background: #0a1a1a; color: #4fd4d4; border: 1px solid #1a3a3a; }
+  .badge-awesome { background: #1a1a0a; color: #d4d44f; border: 1px solid #3a3a1a; }
+  .badge-websearch { background: #0a0a1a; color: #7f9fff; border: 1px solid #1a1a3a; }
+  .badge-skillsmp { background: #1a0a2a; color: #c77fff; border: 1px solid #3a1a4a; }
+  .risk-high { background: #2a0a0a; color: #ff5c5c; border: 1px solid #4a1a1a; }
+  .risk-med { background: #2a1e0a; color: #ffb347; border: 1px solid #4a3a1a; }
+  .risk-none { color: #444; }
+  label.checkbox { font-size: 13px; color: #888; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .pulse { animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  #log { color: #555; font-size: 12px; margin: 6px 0; min-height: 18px; }
+  .empty { color: #444; text-align: center; padding: 40px; }
+  #chatBox { margin: 18px 0; border: 1px solid #333; background: #111; padding: 14px; }
+  #chatBox h2 { margin: 0 0 10px; font-size: 14px; color: #fff; text-transform: uppercase; letter-spacing: 1px; }
+  #chatForm { display: flex; gap: 8px; }
+  #chatInput { flex: 1; background: #1a1a2e; color: #eee; border: 1px solid #444; padding: 9px 12px; font-family: monospace; font-size: 14px; }
+  #chatInput:focus { outline: none; border-color: #7eb8f7; }
+  #chatResults { margin-top: 12px; }
+  #chatThread { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  #chatThread:empty { display: none; }
+  .msg { max-width: 85%; padding: 8px 12px; font-size: 13px; line-height: 1.5; border-radius: 4px; }
+  .msg-user { align-self: flex-end; background: #1a2a3a; color: #cde3f7; border: 1px solid #2a4a6a; }
+  .msg-bot { align-self: flex-start; background: #161616; color: #bbb; border: 1px solid #2a2a2a; }
+  .msg-options { align-self: flex-start; display: flex; flex-direction: column; gap: 6px; max-width: 85%; }
+  .msg-options button { text-align: left; font-size: 12px; padding: 6px 10px; }
+  #chatResetBtn { padding: 8px 12px; }
+  .chat-hit { border: 1px solid #222; border-left: 3px solid #7eb8f7; background: #141414; padding: 10px 12px; margin-bottom: 8px; }
+  .chat-hit.best { border-left-color: #6fcf6f; background: #131a13; }
+  .chat-hit .hit-name { font-size: 14px; }
+  .chat-hit .hit-name a { color: #7eb8f7; text-decoration: none; font-weight: bold; }
+  .chat-hit.best .hit-name a { color: #6fcf6f; }
+  .chat-hit .hit-name a:hover { text-decoration: underline; }
+  .chat-hit .hit-desc { color: #999; font-size: 12px; margin: 4px 0; }
+  .chat-hit .hit-meta { font-size: 11px; color: #555; }
+  .best-label { display: inline-block; background: #1a2a1a; color: #6fcf6f; border: 1px solid #2a4a2a; padding: 1px 7px; font-size: 10px; border-radius: 2px; margin-right: 6px; text-transform: uppercase; }
+  #chatStatus { color: #555; font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>Claude Skill Scraper</h1>
+<div id="status">Total skills: <span id="total">...</span> &nbsp;|&nbsp; Last run: <span id="lastrun">...</span></div>
+<div id="log"></div>
+
+<div id="chatBox">
+  <h2>Find a skill</h2>
+  <div id="chatThread"></div>
+  <form id="chatForm" onsubmit="sendChat(event)">
+    <input id="chatInput" type="text" placeholder="Describe what you're trying to do, e.g. 'I want to scrape a website and take screenshots'" autocomplete="off">
+    <button type="submit" id="chatBtn">Send</button>
+    <button type="button" id="chatResetBtn" onclick="resetChat()" title="Start over">↺</button>
+  </form>
+</div>
+
+<div class="controls">
+  <button id="btn" onclick="startScrape()">Scrape Now</button>
+  <select id="sourceFilter" onchange="loadSkills()">
+    <option value="">All sources</option>
+    <option value="github">GitHub</option>
+    <option value="github_skill_file">GitHub Skill Files</option>
+    <option value="npm">npm</option>
+    <option value="smithery_registry">Smithery</option>
+    <option value="glama_registry">Glama</option>
+    <option value="mcp_official_registry">MCP Official Registry</option>
+    <option value="pulsemcp_registry">PulseMCP</option>
+    <option value="awesome_list">Awesome Lists</option>
+    <option value="web_search">Web Search</option>
+    <option value="skillsmp">SkillsMP</option>
+  </select>
+  <button onclick="loadSkills()">Refresh</button>
+  <button id="rescanBtn" onclick="startRescan()">Rescan for Malware</button>
+  <label class="checkbox"><input type="checkbox" id="flaggedOnly" onchange="loadSkills()"> Flagged only</label>
+  <a href="/library" target="_blank" style="color:#7eb8f7;font-size:13px;">Browse local library (saved .md files) &#8599;</a>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Source</th>
+      <th>Name</th>
+      <th>Description</th>
+      <th>Tags</th>
+      <th>Risk</th>
+      <th>Discovered</th>
+    </tr>
+  </thead>
+  <tbody id="tbody">
+    <tr><td colspan="6" class="empty">Hit "Scrape Now" to start.</td></tr>
+  </tbody>
+</table>
+
+<script>
+// Same-origin when served over http(s) (localhost AND the public tunnel URL);
+// localhost fallback only for opening this file directly from disk.
+const API = location.protocol.startsWith("http") ? location.origin : "http://localhost:8000";
+let polling = null;
+let rescanPolling = null;
+
+function riskBadge(s) {
+  const score = s.risk_score || 0;
+  if (score >= 3) return `<span class="badge risk-high" title="${(s.risk_flags||[]).join(', ')}">⚠ HIGH (${score})</span>`;
+  if (score > 0) return `<span class="badge risk-med" title="${(s.risk_flags||[]).join(', ')}">⚠ ${score}</span>`;
+  return s.scanned_at ? '<span class="risk-none">clean</span>' : '<span class="risk-none">—</span>';
+}
+
+function badgeClass(source) {
+  if (source === "github" || source === "github_skill_file") return "badge-github";
+  if (source === "mcp_official_registry") return "badge-pulsemcp";
+  if (source === "npm") return "badge-npm";
+  if (source.includes("smithery")) return "badge-smithery";
+  if (source.includes("glama")) return "badge-glama";
+  if (source.includes("anthropic")) return "badge-anthropic";
+  if (source.includes("pulsemcp")) return "badge-pulsemcp";
+  if (source.includes("awesome")) return "badge-awesome";
+  if (source.includes("web_search")) return "badge-websearch";
+  if (source.includes("skillsmp")) return "badge-skillsmp";
+  return "";
+}
+
+function fmtDate(s) {
+  if (!s) return "";
+  return new Date(s).toLocaleString();
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch(API + "/status");
+    const d = await r.json();
+    document.getElementById("total").textContent = d.total_skills + (d.flagged_skills > 0 ? ` (${d.flagged_skills} flagged)` : "");
+    if (d.recent_runs && d.recent_runs.length) {
+      const run = d.recent_runs[0];
+      document.getElementById("lastrun").textContent =
+        `${run.status} — ${run.skills_found ?? 0} skills — ${fmtDate(run.started_at)}` +
+        (d.continuous_mode ? ` (auto every ${Math.round(d.interval_seconds/60)}m)` : "");
+    }
+    const rescanBtn = document.getElementById("rescanBtn");
+    if (d.rescan && d.rescan.running) {
+      rescanBtn.disabled = true;
+      rescanBtn.textContent = `Rescanning... (${d.rescan.scanned} done)`;
+      if (!rescanPolling) rescanPolling = setInterval(loadStatus, 3000);
+    } else {
+      rescanBtn.disabled = false;
+      rescanBtn.textContent = "Rescan for Malware";
+      if (rescanPolling) { clearInterval(rescanPolling); rescanPolling = null; loadSkills(); }
+    }
+    if (d.running) {
+      document.getElementById("log").textContent = "⏳ Scraping in progress...";
+      document.getElementById("log").className = "pulse";
+      document.getElementById("btn").disabled = true;
+    } else {
+      document.getElementById("log").textContent = "";
+      document.getElementById("log").className = "";
+      document.getElementById("btn").disabled = false;
+      if (polling) { clearInterval(polling); polling = null; loadSkills(); }
+    }
+  } catch(e) {
+    document.getElementById("log").textContent = "Cannot connect to backend (is scraper.py running?)";
+  }
+}
+
+async function loadSkills() {
+  const source = document.getElementById("sourceFilter").value;
+  const flaggedOnly = document.getElementById("flaggedOnly").checked;
+  let url = API + "/skills?limit=200";
+  if (source) url += "&source=" + source;
+  if (flaggedOnly) url += "&min_risk=1";
+  try {
+    const r = await fetch(url);
+    const skills = await r.json();
+    const tbody = document.getElementById("tbody");
+    if (!skills.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">No skills found yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = skills.map(s => `
+      <tr>
+        <td><span class="badge ${badgeClass(s.source)}">${s.source}</span></td>
+        <td><a href="${s.url || '#'}" target="_blank">${s.name}</a></td>
+        <td>${s.description || ''}</td>
+        <td>${(s.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}</td>
+        <td>${riskBadge(s)}</td>
+        <td>${fmtDate(s.discovered_at)}</td>
+      </tr>
+    `).join('');
+  } catch(e) {}
+}
+
+async function startRescan() {
+  document.getElementById("rescanBtn").disabled = true;
+  try {
+    await fetch(API + "/rescan", { method: "POST" });
+    rescanPolling = setInterval(loadStatus, 3000);
+    loadStatus();
+  } catch(e) {
+    document.getElementById("rescanBtn").disabled = false;
+  }
+}
+
+async function startScrape() {
+  document.getElementById("btn").disabled = true;
+  document.getElementById("log").textContent = "Starting scrape...";
+  try {
+    await fetch(API + "/scrape", { method: "POST" });
+    polling = setInterval(loadStatus, 3000);
+    loadStatus();
+  } catch(e) {
+    document.getElementById("log").textContent = "Error: " + e.message;
+    document.getElementById("btn").disabled = false;
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Everything is same-origin now that this page is served by the scraper's own
+// FastAPI app (locally and through the public tunnel). Admin endpoints are
+// still blocked for public callers server-side; IS_LOCAL just hides their UI.
+const IS_LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
+
+let chatMessages = [];
+let prevOptions = [];
+
+async function callChat() {
+  const body = JSON.stringify({ messages: chatMessages, prev_options: prevOptions });
+  const r = await fetch(API + "/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  return r.json();
+}
+
+function addMsg(html, cls) {
+  const div = document.createElement("div");
+  div.className = cls;
+  div.innerHTML = html;
+  document.getElementById("chatThread").appendChild(div);
+  div.scrollIntoView({ block: "nearest" });
+  return div;
+}
+
+function skillCard(s) {
+  return `
+    <div class="chat-hit best">
+      <div class="hit-name">
+        <span class="best-label">Recommended</span>
+        <a href="${esc(s.url)}" target="_blank">${esc(s.name)}</a>
+      </div>
+      <div class="hit-desc">${esc(s.description)}</div>
+      <div class="hit-meta">
+        <span class="badge ${badgeClass(s.source)}">${esc(s.source)}</span>
+        ${s.stars ? ` ★ ${s.stars}` : ''}
+        ${(s.risk_score || 0) > 0 ? ` &nbsp;<span class="badge risk-med">⚠ risk ${s.risk_score}</span>` : ''}
+        ${(s.tags || []).slice(0, 6).map(t => ` <span class="tag">${esc(t)}</span>`).join('')}
+      </div>
+    </div>`;
+}
+
+function resetChat() {
+  chatMessages = [];
+  prevOptions = [];
+  document.getElementById("chatThread").innerHTML = "";
+  document.getElementById("chatInput").value = "";
+  document.getElementById("chatInput").focus();
+}
+
+// Clicking an offered option resolves instantly client-side (works with or
+// without the LLM backend) and closes out the conversation.
+function pickOption(skillB64) {
+  const s = JSON.parse(decodeURIComponent(escape(atob(skillB64))));
+  addMsg(esc(s.name), "msg msg-user");
+  addMsg("Here's that one:" + skillCard(s), "msg msg-bot");
+  chatMessages = [];
+  prevOptions = [];
+}
+
+function handleChatResponse(d) {
+  if (d.type === "recommend") {
+    addMsg(esc(d.message) + skillCard(d.skill), "msg msg-bot");
+    chatMessages = [];  // resolved; next message starts a fresh question
+    prevOptions = [];
+  } else if (d.type === "clarify") {
+    addMsg(esc(d.message), "msg msg-bot");
+    chatMessages.push({ role: "assistant", content: d.message });
+    prevOptions = (d.options || []).map(s => s.url).filter(Boolean);
+    const opts = document.createElement("div");
+    opts.className = "msg-options";
+    opts.innerHTML = d.options.map(s =>
+      `<button onclick='pickOption("${btoa(unescape(encodeURIComponent(JSON.stringify(s))))}")'>
+        ${esc(s.name)} — ${esc((s.description || "").slice(0, 80))}
+      </button>`
+    ).join('');
+    document.getElementById("chatThread").appendChild(opts);
+    opts.scrollIntoView({ block: "nearest" });
+  } else {
+    addMsg(esc(d.message || "No matches found."), "msg msg-bot");
+    chatMessages = [];
+    prevOptions = [];
+  }
+}
+
+async function sendChat(ev) {
+  ev.preventDefault();
+  const input = document.getElementById("chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  addMsg(esc(text), "msg msg-user");
+  chatMessages.push({ role: "user", content: text });
+  document.getElementById("chatBtn").disabled = true;
+  const thinking = addMsg("Searching...", "msg msg-bot");
+  try {
+    const d = await callChat();
+    thinking.remove();
+    handleChatResponse(d);
+  } catch(e) {
+    thinking.textContent = "Search failed: " + e.message;
+  } finally {
+    document.getElementById("chatBtn").disabled = false;
+    input.focus();
+  }
+}
+
+loadStatus();
+loadSkills();
+if (!IS_LOCAL) {
+  // Public page: status + skill browsing are read-only and allowed, but the
+  // rescan/scrape admin buttons are 403 for public callers -- hide them.
+  document.querySelector(".controls").style.display = "none";
+}
+</script>
+</body>
+</html>

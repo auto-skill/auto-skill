@@ -1,0 +1,16 @@
+# local data & state (the DB is hundreds of MB and machine-specific)
+local_skills.db
+local_skills.db-wal
+local_skills.db-shm
+skills_library/
+migrate_state.json
+
+# logs
+*.log
+
+# python
+__pycache__/
+*.pyc
+
+# session/tooling state
+.claude/
