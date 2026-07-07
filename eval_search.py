@@ -49,6 +49,19 @@ CASES = [
     ("generate images with ai", ["image", "dall", "stable diffusion", "flux"]),
 ]
 
+# Prompts that are NOT delegable tasks: the gated /find-semantic endpoint
+# should return nothing for these. Each one routed junk in production before
+# the similarity floor existed.
+NEGATIVE_CASES = [
+    "remember this is a product whatever works for me has to work for everyone else also",
+    "ok sounds good lets do it",
+    "thanks that worked great",
+    "why is the server down right now",
+    "can you explain what you just did",
+    "hmm let me think about that for a bit",
+    "that doesnt look right to me",
+]
+
 TOP_K = 3
 
 
@@ -94,6 +107,21 @@ async def main():
     print(f"\n{'engine':<10}{'hit@1':>8}{'hit@3':>8}   (n={n};  Y = hit@1, y = hit@3 only, . = miss)")
     for engine, s in scores.items():
         print(f"{engine:<10}{s['hit1']/n:>8.0%}{s['hit3']/n:>8.0%}")
+
+    # Gate check: positives must pass the similarity floor, negatives must not.
+    async with httpx.AsyncClient() as client:
+        pos_pass = neg_reject = 0
+        for query, _ in CASES:
+            r = await client.get(f"{SUPABASE_URL}/find-semantic", params={"q": query}, timeout=30)
+            if r.status_code == 200 and r.json().get("results"):
+                pos_pass += 1
+        for query in NEGATIVE_CASES:
+            r = await client.get(f"{SUPABASE_URL}/find-semantic", params={"q": query}, timeout=30)
+            if r.status_code == 200 and not r.json().get("results"):
+                neg_reject += 1
+            else:
+                print(f"  gate MISS (junk passed): {query[:60]!r}")
+    print(f"\ngate: positives passed {pos_pass}/{n}, negatives rejected {neg_reject}/{len(NEGATIVE_CASES)}")
 
 
 if __name__ == "__main__":

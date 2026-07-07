@@ -393,7 +393,12 @@ def hybrid_search_skills(
         by_id[row["id"]] = row
         scores[row["id"]] = scores.get(row["id"], 0.0) + fts_weight / (rrf_k + ix)
     for ix, row in enumerate(vec, start=1):
-        by_id[row["id"]] = row
+        row["similarity"] = row["rank"]  # cosine, before rank is overwritten with the fused score
+        existing = by_id.get(row["id"])
+        if existing is not None:
+            existing["similarity"] = row["similarity"]
+        else:
+            by_id[row["id"]] = row
         scores[row["id"]] = scores.get(row["id"], 0.0) + vec_weight / (rrf_k + ix)
 
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:match_count]

@@ -151,52 +151,40 @@ async def embed_query(text: str) -> list[float]:
     return (await asyncio.to_thread(embed_texts, [text]))[0]
 
 
-# The ~202k skills already in Supabase are frozen there (storage moved local
-#2026-07-05 when the free tier ran out of space) but still worth searching --
-# this is a read-only anon key, safe to keep here alongside the local DB.
-OLD_SUPABASE_URL = "https://kgkuoxdizynkcrbasamu.supabase.co"
-OLD_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtna3VveGRpenlua2NyYmFzYW11Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4NzE4NzUsImV4cCI6MjA5ODQ0Nzg3NX0.6rqfcqdVShb9fo3x5z9E6mf6f-0iUbJn9Q7hUFqZ-jw"
-OLD_SUPABASE_HEADERS = {
-    "apikey": OLD_SUPABASE_ANON_KEY,
-    "Authorization": f"Bearer {OLD_SUPABASE_ANON_KEY}",
-    "Content-Type": "application/json",
-}
+# Minimum top-hit cosine similarity for a query to count as having a real
+# match. Calibrated 2026-07-06 against gte-small on this corpus: genuine task
+# queries score >= 0.885 at top-1; conversational/meta prompts ("thanks",
+# "remember this is a product", "ok sounds good") land 0.82-0.88. Queries whose
+# best vector hit falls below the floor return no results instead of noise.
+MIN_SIMILARITY = float(os.getenv("MIN_SIMILARITY", "0.87"))
+
+
+def _passes_similarity_floor(results: list[dict]) -> bool:
+    """True when the results contain at least one confident vector hit. Fails
+    open when no result carries a similarity (pure-FTS fallback path)."""
+    sims = [r["similarity"] for r in results if r.get("similarity") is not None]
+    if not sims:
+        return True
+    return max(sims) >= MIN_SIMILARITY
 
 
 async def retrieve_skills(client: httpx.AsyncClient, query_text: str, limit: int = 10) -> list[dict]:
-    """Hybrid FTS+vector retrieval against the local DB (fresh skills scraped
-    since storage moved local), merged with the frozen ~202k-skill Supabase
-    corpus so search coverage doesn't regress. Falls back to pure FTS if
-    embedding fails."""
+    """Hybrid FTS+vector retrieval against the local DB. The frozen Supabase
+    corpus was fully migrated into local_skills.db (migrate_state.json:
+    202,367 rows on 2026-07-05), so local is the single source of truth.
+    Falls back to pure FTS if embedding fails."""
     body = {"query_text": query_text, "match_count": limit}
-    vec = None
     try:
-        vec = await embed_query(query_text)
-        body["query_embedding"] = vec
+        body["query_embedding"] = await embed_query(query_text)
         rpc = "hybrid_search_skills"
     except Exception:
         rpc = "search_skills"
         body = {"query": query_text, "max_results": limit}
 
-    local_task = client.post(f"{SUPABASE_URL}/rest/v1/rpc/{rpc}", json=body, headers=HEADERS, timeout=20)
-    old_body = dict(body)
-    if vec is not None:
-        old_body["query_embedding"] = str(vec)  # Postgres vector type wants the "[...]" string form
-    old_task = client.post(f"{OLD_SUPABASE_URL}/rest/v1/rpc/{rpc}", json=old_body, headers=OLD_SUPABASE_HEADERS, timeout=15)
-
-    local_r, old_r = await asyncio.gather(local_task, old_task, return_exceptions=True)
-
-    results = []
-    seen_urls = set()
-    for r in (local_r, old_r):
-        if isinstance(r, Exception) or r.status_code != 200:
-            continue
-        for row in r.json():
-            url = row.get("url")
-            if url and url in seen_urls:
-                continue
-            seen_urls.add(url)
-            results.append(row)
+    r = await client.post(f"{SUPABASE_URL}/rest/v1/rpc/{rpc}", json=body, headers=HEADERS, timeout=20)
+    if r.status_code != 200:
+        return []
+    results = list(r.json())
     results.sort(key=lambda row: row.get("rank", 0), reverse=True)
     return results[:limit]
 
@@ -393,7 +381,7 @@ async def chat_recommend(body: ChatRequest):
             return any(x == name or (x and x in url) for x in excluded)
 
         candidates = [c for c in candidates if (c.get("risk_score") or 0) < 3 and not _excluded(c)]
-        if not candidates:
+        if not candidates or not _passes_similarity_floor(candidates):
             return {"type": "none", "message": NONE_MESSAGE}
 
         if use_llm:
@@ -429,7 +417,13 @@ async def chat_recommend(body: ChatRequest):
 
 
 @router.get("/find-semantic")
-async def find_semantic(q: str, limit: int = 8):
-    """Raw hybrid-ranked results (debugging/eval)."""
+async def find_semantic(q: str, limit: int = 8, gate: bool = True):
+    """Hybrid-ranked results. With gate=true (default), queries whose best
+    vector hit falls below MIN_SIMILARITY return an empty list instead of
+    noise — pass gate=false for debugging/eval of raw rankings."""
     async with httpx.AsyncClient() as client:
-        return {"query": q, "results": await retrieve_skills(client, q, limit)}
+        results = await retrieve_skills(client, q, limit)
+    if gate and not _passes_similarity_floor(results):
+        return {"query": q, "results": [], "gated": True,
+                "message": f"No result cleared the similarity floor ({MIN_SIMILARITY})."}
+    return {"query": q, "results": results}
