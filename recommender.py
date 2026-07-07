@@ -171,27 +171,25 @@ def _passes_similarity_floor(results: list[dict]) -> bool:
 def injection_tier(results: list[dict]) -> str:
     """Decide how much of the top result to hand to a caller.
 
-    Top-1 cosine similarity alone doesn't separate "one obviously right skill"
-    from "several plausible skills" -- sampled on this corpus, both a sharp
-    match ("send slack messages from claude", 0.946) and a vague one ("make
-    something cool for my friend", 0.836, itself below the floor) land in a
-    narrow band; a specific-but-crowded query ("set up automation for my
-    workflow", 0.934) scores just as high as a clean single-skill match. What
-    *does* separate them is whether the fused hybrid rank agrees: reuses the
-    same RRF-gap heuristic _heuristic_response already uses for /chat's
-    recommend-vs-clarify split.
-
-    Returns "full" (inject the whole skill), "hint" (name + one-liner only,
-    the match exists but multiple candidates are plausible), or "none".
+    Only "none" is decided here (the similarity floor). "full" vs. "hint" is
+    NOT: an earlier version used the RRF top1/top2 gap (_heuristic_response's
+    RECOMMEND_GAP) to guess at ambiguity, but calibration against
+    eval_search.py's 30 cases (2026-07-07) showed the gap is a smooth
+    continuum from 1.00 to 3.07 with no separating cluster -- "manage my
+    kubernetes cluster" (1.02x) is not meaningfully more "ambiguous" than
+    "browse and query github repositories" (1.11x); both just have several
+    decent near-duplicate skills, which is normal in a 350k-skill corpus, not
+    a sign the top pick is untrustworthy. Gating on that ratio meant 28/30
+    real tasks downgraded to a hint that never gets applied.
+    Whether a top pick is *safe* to auto-apply is a content question, not a
+    ranking one -- see _is_stub_content / _is_unconfirmed_action_content in
+    the auto-skill-connector repo, which is what actually caught the one real
+    incident (an unconfirmed-action skill), and still runs downstream of this
+    for every "full" decision.
     """
     if not results or not _passes_similarity_floor(results):
         return "none"
-    if len(results) == 1:
-        return "full"
-    top, runner_up = results[0].get("rank", 0), results[1].get("rank", 0)
-    if runner_up <= 0 or top >= runner_up * RECOMMEND_GAP:
-        return "full"
-    return "hint"
+    return "full"
 
 
 async def retrieve_skills(client: httpx.AsyncClient, query_text: str, limit: int = 10) -> list[dict]:
