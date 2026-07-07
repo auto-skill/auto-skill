@@ -9,6 +9,7 @@ packed float32 BLOBs; vector search is brute-force numpy (fine at the scale
 a single scraper accumulates going forward).
 """
 import json
+import os
 import re
 import sqlite3
 import struct
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-DB_PATH = Path(__file__).parent / "local_skills.db"
+DB_PATH = Path(os.getenv("LOCAL_DB_PATH", str(Path(__file__).parent / "local_skills.db")))
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS skills (
@@ -34,6 +35,13 @@ CREATE TABLE IF NOT EXISTS skills (
     risk_score INTEGER DEFAULT 0,
     risk_flags TEXT DEFAULT '[]',
     scanned_at TEXT,
+    content_hash TEXT,
+    canonical_id TEXT,
+    quality_status TEXT DEFAULT 'active',
+    quality_reasons TEXT DEFAULT '[]',
+    quality_score INTEGER DEFAULT 0,
+    platforms TEXT DEFAULT '[]',
+    category TEXT,
     embedding BLOB,
     embedding_text_hash TEXT,
     embedded_at TEXT
@@ -72,8 +80,18 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
 """
 
 TABLES = {
-    "skills": {"unique": "url", "json_cols": {"tags", "raw", "risk_flags"}},
+    "skills": {"unique": "url", "json_cols": {"tags", "raw", "risk_flags", "quality_reasons", "platforms"}},
     "scrape_runs": {"unique": None, "json_cols": set()},
+}
+
+SKILL_COLUMN_DEFAULTS = {
+    "content_hash": "TEXT",
+    "canonical_id": "TEXT",
+    "quality_status": "TEXT DEFAULT 'active'",
+    "quality_reasons": "TEXT DEFAULT '[]'",
+    "quality_score": "INTEGER DEFAULT 0",
+    "platforms": "TEXT DEFAULT '[]'",
+    "category": "TEXT",
 }
 
 
@@ -88,6 +106,10 @@ def init_db() -> None:
     conn = get_conn()
     try:
         conn.executescript(_SCHEMA)
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(skills)").fetchall()}
+        for col, spec in SKILL_COLUMN_DEFAULTS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE skills ADD COLUMN {col} {spec}")
         conn.commit()
     finally:
         conn.close()
@@ -298,7 +320,9 @@ def search_skills_fts(query: str, max_results: int = 10) -> list[dict]:
             SELECT s.*, bm25(skills_fts) AS bm25
             FROM skills_fts
             JOIN skills s ON s.rowid = skills_fts.rowid
-            WHERE skills_fts MATCH ? AND s.risk_score < 3
+            WHERE skills_fts MATCH ?
+              AND s.risk_score < 3
+              AND COALESCE(s.quality_status, 'active') IN ('active', 'metadata_only')
             ORDER BY bm25(skills_fts) ASC
             LIMIT ?
             """,
@@ -318,8 +342,8 @@ def search_skills_fts(query: str, max_results: int = 10) -> list[dict]:
 
 
 # In-memory embedding-matrix cache. Rebuilding the matrix from blobs is
-# O(corpus) per query and dominates latency once the corpus is large
-# (12-16s at ~200k rows); with the cache a search is a single matvec.
+# O(corpus) per query and dominates latency once the corpus is large; with the
+# cache a search is a single matvec.
 # Short TTL so freshly embedded skills become searchable within a minute.
 _EMB_DIM = 384
 _EMB_BLOB_LEN = _EMB_DIM * 4
@@ -332,7 +356,10 @@ def _embedding_matrix(conn: sqlite3.Connection) -> tuple[list[str], np.ndarray]:
     if _emb_cache["mat"] is not None and now - _emb_cache["at"] < _EMB_CACHE_TTL_SECONDS:
         return _emb_cache["ids"], _emb_cache["mat"]
     rows = conn.execute(
-        "SELECT id, embedding FROM skills WHERE embedding IS NOT NULL AND risk_score < 3"
+        "SELECT id, embedding FROM skills "
+        "WHERE embedding IS NOT NULL "
+        "AND risk_score < 3 "
+        "AND COALESCE(quality_status, 'active') = 'active'"
     ).fetchall()
     ids = [r["id"] for r in rows if len(r["embedding"]) == _EMB_BLOB_LEN]
     blobs = [bytes(r["embedding"]) for r in rows if len(r["embedding"]) == _EMB_BLOB_LEN]
@@ -407,7 +434,10 @@ def hybrid_search_skills(
         row = dict(by_id[skill_id])
         stars = row.get("stars") or 0
         risk = row.get("risk_score") or 0
-        row["rank"] = score * (1 + 0.05 * np.log1p(max(stars, 0))) * (1 - 0.15 * min(risk, 2))
+        quality = max(0, min(int(row.get("quality_score") or 50), 100)) / 100
+        star_bonus = 0.003 * min(np.log1p(max(stars, 0)), 6) / 6
+        risk_penalty = 0.01 * min(risk, 2)
+        row["rank"] = float(score + star_bonus + (0.004 * quality) - risk_penalty)
         out.append(row)
     out.sort(key=lambda r: r["rank"], reverse=True)
     return out

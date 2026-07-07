@@ -1,0 +1,80 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: always
+    environment:
+      LOCAL_DB_PATH: /data/local_skills.db
+      AUTO_START_SCRAPER: "0"
+      AUTO_START_EMBEDDER: "0"
+      ENABLE_OLLAMA_CHAT: "0"
+    volumes:
+      - ../data:/data
+      - ../skills_library:/app/skills_library
+    command: uvicorn scraper:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      LOCAL_DB_URL: http://api:8000
+      AUTO_START_SCRAPER: "0"
+      AUTO_START_EMBEDDER: "0"
+      SCRAPE_INTERVAL_SECONDS: "900"
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SEARXNG_URL: ${SEARXNG_URL:-}
+    volumes:
+      - ../skills_library:/app/skills_library
+    command: python worker.py
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+
+  litestream:
+    image: litestream/litestream:latest
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      LITESTREAM_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      LITESTREAM_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET}
+    volumes:
+      - ../data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    command: replicate -config /etc/litestream.yml
+
+  library-backup:
+    image: amazon/aws-cli:2
+    restart: always
+    entrypoint: ["/bin/sh", "/scripts/backup-library.sh"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: auto
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET}
+      R2_LIBRARY_PREFIX: ${R2_LIBRARY_PREFIX:-skills-library}
+      LIBRARY_BACKUP_INTERVAL_SECONDS: ${LIBRARY_BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - ../skills_library:/library:ro
+      - ../data/backups:/backups
+      - ./backup-library.sh:/scripts/backup-library.sh:ro

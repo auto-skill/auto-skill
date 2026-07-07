@@ -11,10 +11,11 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timezone, date, timedelta
 import os
+from quality import content_hash as quality_content_hash, evaluate_quality
 
 # Storage moved local 2026-07-05 (Supabase free-tier space ran out) -- new
 # skills now go into local_skills.db via local_api.py's router, mounted below
@@ -22,13 +23,14 @@ import os
 # Supabase did, so pointing SUPABASE_URL at our own loopback address is the
 # only change the rest of this file needed. Old Supabase data is untouched;
 # the public connector still reads from it separately.
-SUPABASE_URL = f"http://127.0.0.1:{os.getenv('LOCAL_DB_PORT', '8000')}"
+SUPABASE_URL = os.getenv("LOCAL_DB_URL", f"http://127.0.0.1:{os.getenv('LOCAL_DB_PORT', '8000')}").rstrip("/")
 HEADERS = {"Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation"}
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 # Point this at a self-hosted SearXNG instance (see README) to enable general
 # web search. Left unset, scrape_web_search() is skipped entirely.
 SEARXNG_URL = os.getenv("SEARXNG_URL", "").rstrip("/")
 SCRAPE_INTERVAL_SECONDS = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "900"))
+AUTO_START_SCRAPER = os.getenv("AUTO_START_SCRAPER", "1").lower() not in {"0", "false", "no"}
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -39,8 +41,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # headers while genuinely local callers (scraper itself, recommender, hook,
 # mcp_server) do not. Public callers get search/read endpoints only -- the
 # local REST surface has no auth, so every write path must stay loopback-only.
-PUBLIC_GET_PATHS = {"/", "/status", "/find-semantic", "/skills", "/library", "/rest/v1/skills", "/healthz"}
-PUBLIC_POST_RE = re.compile(r"^(/chat|/rest/v1/rpc/(search_skills|vector_search_skills|hybrid_search_skills))$")
+PUBLIC_GET_PATHS = {"/", "/healthz", "/readyz", "/status", "/find-semantic", "/skills", "/library", "/rest/v1/skills"}
+PUBLIC_POST_RE = re.compile(r"^(/chat|/route|/rest/v1/rpc/(search_skills|vector_search_skills|hybrid_search_skills))$")
 
 
 @app.middleware("http")
@@ -50,7 +52,11 @@ async def public_readonly_guard(request, call_next):
     if is_public:
         path = request.url.path.rstrip("/") or "/"
         allowed = (
-            request.method == "GET" and (path in PUBLIC_GET_PATHS or path.startswith("/library/files/"))
+            request.method == "GET" and (
+                path in PUBLIC_GET_PATHS
+                or path.startswith("/library/files/")
+                or path.startswith("/content/")
+            )
         ) or (
             request.method == "POST" and PUBLIC_POST_RE.match(path)
         )
@@ -62,6 +68,7 @@ async def public_readonly_guard(request, call_next):
 # above) -- mounted first so it's ready before the recommender's startup hook
 # tries to reach it.
 from local_api import router as local_db_router  # noqa: E402
+import local_store as store  # noqa: E402
 app.include_router(local_db_router)
 
 # Semantic recommender (hybrid pgvector search + optional Ollama chat) lives in
@@ -74,6 +81,34 @@ os.makedirs(_library_files_dir, exist_ok=True)
 app.mount("/library/files", StaticFiles(directory=_library_files_dir), name="library_files")
 
 scrape_task = None
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "service": "auto-skill-api"}
+
+
+@app.get("/readyz")
+async def readyz():
+    def _probe():
+        conn = store.get_conn()
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+            active = conn.execute(
+                "SELECT COUNT(*) FROM skills WHERE COALESCE(quality_status, 'active') = 'active'"
+            ).fetchone()[0]
+            embedded = conn.execute("SELECT COUNT(*) FROM skills WHERE embedding IS NOT NULL").fetchone()[0]
+            return {"total_skills": total, "active_skills": active, "embedded_skills": embedded}
+        finally:
+            conn.close()
+
+    try:
+        counts = await asyncio.to_thread(_probe)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=503)
+
+    status_code = 200 if counts["total_skills"] > 0 else 503
+    return JSONResponse({"ok": status_code == 200, **counts}, status_code=status_code)
 
 
 class RateLimiter:
@@ -151,7 +186,7 @@ def normalize_url(url: str) -> str:
 # --- SKILL.md frontmatter parsing ----------------------------------------
 # Flat YAML only (name/description/allowed-tools etc.) — regex-based to avoid a
 # PyYAML dependency; this function is the single swap point if that changes.
-FRONTMATTER_RE = re.compile("\\A﻿?---[ \\t]*\\r?\\n(.*?)\\r?\\n---[ \\t]*(?:\\r?\\n|\\Z)", re.S)
+FRONTMATTER_RE = re.compile(r"\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
 FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):\s*(.*)$")
 
 
@@ -267,7 +302,24 @@ class RunBudget:
         return True
 
 
-SKILL_COLUMNS = ("name", "description", "source", "url", "tags", "raw", "risk_score", "risk_flags", "scanned_at")
+SKILL_COLUMNS = (
+    "name",
+    "description",
+    "source",
+    "url",
+    "tags",
+    "raw",
+    "risk_score",
+    "risk_flags",
+    "scanned_at",
+    "content_hash",
+    "canonical_id",
+    "quality_status",
+    "quality_reasons",
+    "quality_score",
+    "platforms",
+    "category",
+)
 
 
 def skill_to_row(skill: dict) -> dict:
@@ -1386,6 +1438,7 @@ async def save_to_library(skill: dict, content: str):
             "source": skill.get("source"),
             "url": skill.get("url"),
             "description": skill.get("description"),
+            "content_hash": skill.get("content_hash") or quality_content_hash(content),
             "file": filename,
             "saved_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -1419,9 +1472,10 @@ async def scan_skill(client: httpx.AsyncClient, skill: dict):
         skill["risk_score"] = score
         skill["risk_flags"] = flags
         skill["scanned_at"] = datetime.now(timezone.utc).isoformat()
+        skill.update(evaluate_quality(skill, content))
 
         if content:
-            await save_to_library(skill, content)
+            skill["_library_content"] = content
 
 
 async def get_scanned_urls(client: httpx.AsyncClient) -> set:
@@ -1483,6 +1537,25 @@ def dedup_skills(skills: list) -> list:
     return list(deduped.values())
 
 
+def mark_content_duplicates(skills: list) -> None:
+    """Mark same-run duplicate content by normalized content hash."""
+    canonical_by_hash: dict[str, str] = {}
+    for skill in skills:
+        chash = skill.get("content_hash")
+        if not chash or skill.get("quality_status") != "active":
+            continue
+        canonical = canonical_by_hash.get(chash)
+        if canonical:
+            reasons = set(skill.get("quality_reasons") or [])
+            reasons.add("duplicate-content")
+            skill["quality_status"] = "duplicate"
+            skill["quality_reasons"] = sorted(reasons)
+            skill["canonical_id"] = canonical
+            skill["embedding"] = None
+        else:
+            canonical_by_hash[chash] = skill.get("url") or skill.get("id") or chash
+
+
 async def run_scrape(run_id: str):
     async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
@@ -1508,6 +1581,12 @@ async def run_scrape(run_id: str):
             already_scanned = await get_scanned_urls(client)
             unscanned = [s for s in skills if s["url"] not in already_scanned or s.get("_content")]
             await asyncio.gather(*(scan_skill(client, s) for s in unscanned))
+            mark_content_duplicates(skills)
+            await asyncio.gather(*(
+                save_to_library(s, s.pop("_library_content"))
+                for s in skills
+                if s.get("_library_content") and s.get("quality_status") not in {"rejected", "duplicate"}
+            ))
             await flush_library_index()
             state.save()
 
@@ -1574,7 +1653,8 @@ async def continuous_scrape_loop():
 
 @app.on_event("startup")
 async def on_startup():
-    asyncio.create_task(continuous_scrape_loop())
+    if AUTO_START_SCRAPER:
+        asyncio.create_task(continuous_scrape_loop())
 
 
 rescan_task = None
@@ -1802,10 +1882,10 @@ async def find_skill(q: str, limit: int = 8):
 async def chat_find_skill(q: str):
     """Conversational single-skill recommender. The whole conversation's user text
     is passed as one combined query. Returns exactly one of:
-      - {"type": "recommend", "skill": {...}, "message": ...}  — one clear winner
-      - {"type": "clarify", "message": ..., "options": [...]}  — ambiguous; the top
+      - {"type": "recommend", "skill": {...}, "message": ...}  - one clear winner
+      - {"type": "clarify", "message": ..., "options": [...]}  - ambiguous; the top
         candidates are offered so the user can pick one or add detail
-      - {"type": "none", "message": ...}                        — nothing matched
+      - {"type": "none", "message": ...}                        - nothing matched
     """
     async with httpx.AsyncClient() as client:
         r = await client.post(
@@ -1815,13 +1895,13 @@ async def chat_find_skill(q: str):
             timeout=15,
         )
         if r.status_code != 200:
-            return {"type": "none", "message": "Search failed — try again in a moment."}
+            return {"type": "none", "message": "Search failed - try again in a moment."}
         results = r.json()
 
     if not results:
         return {
             "type": "none",
-            "message": "I couldn't find anything matching that. Try describing the task with different words — e.g. the tool, file type, or service involved.",
+            "message": "I couldn't find anything matching that. Try describing the task with different words - e.g. the tool, file type, or service involved.",
         }
 
     # Never recommend a skill the malware scan flagged as high risk; surface safer
@@ -1849,7 +1929,7 @@ async def chat_find_skill(q: str):
     options = safe[:3]
     return {
         "type": "clarify",
-        "message": "A few skills fit that about equally well — which of these is closest to what you're doing? Pick one, or describe your task in a bit more detail.",
+        "message": "A few skills fit that about equally well - which of these is closest to what you're doing? Pick one, or describe your task in a bit more detail.",
         "options": options,
     }
 
@@ -1861,7 +1941,7 @@ def _recommend_blurb(skill: dict) -> str:
     if skill.get("stars"):
         parts.append(f"({skill['stars']} GitHub stars)")
     if (skill.get("risk_score") or 0) > 0:
-        parts.append(f"Note: the malware scan gave this a low-level risk score of {skill['risk_score']} — review it before installing.")
+        parts.append(f"Note: the malware scan gave this a low-level risk score of {skill['risk_score']} - review it before installing.")
     return " ".join(parts)
 
 

@@ -17,6 +17,7 @@ Run:  python reindex.py
 """
 import asyncio
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,9 +25,10 @@ from pathlib import Path
 import httpx
 
 from embeddings import LibraryContent, build_embed_text, embed_text_hash, embed_texts
+from quality import evaluate_quality
 
 BASE = Path(__file__).parent
-DB_PATH = BASE / "local_skills.db"
+DB_PATH = Path(os.getenv("LOCAL_DB_PATH", str(BASE / "local_skills.db")))
 REST = "http://127.0.0.1:8000/rest/v1/skills?on_conflict=url"
 HEADERS = {"Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"}
 SCAN_PAGE = 5000
@@ -63,16 +65,18 @@ async def ingest_orphans(client: httpx.AsyncClient, library: LibraryContent) -> 
     finally:
         conn.close()
 
-    orphans = [
-        {
+    orphans = []
+    for url, e in idx.items():
+        if url in known or not e.get("file"):
+            continue
+        row = {
             "name": (e.get("name") or url.rstrip("/").split("/")[-1])[:200],
             "description": e.get("description") or "",
             "source": e.get("source") or "library",
             "url": url,
         }
-        for url, e in idx.items()
-        if url not in known and e.get("file")
-    ]
+        row.update(evaluate_quality(row, library.get(url)))
+        orphans.append(row)
     if orphans:
         await _upsert(client, orphans)
     return len(orphans)
@@ -90,7 +94,9 @@ def scan_stale(library: LibraryContent) -> list[str]:
             rows = conn.execute(
                 "SELECT id,url,name,source,description,tags,embedding_text_hash,"
                 "       embedding IS NULL AS no_vec"
-                "  FROM skills WHERE url IS NOT NULL ORDER BY id LIMIT ? OFFSET ?",
+                "  FROM skills WHERE url IS NOT NULL "
+                "   AND COALESCE(quality_status, 'active') = 'active' "
+                " ORDER BY id LIMIT ? OFFSET ?",
                 (SCAN_PAGE, offset),
             ).fetchall()
             if not rows:
@@ -124,7 +130,8 @@ async def refresh(client: httpx.AsyncClient, library: LibraryContent, ids: list[
             batch_ids = ids[i:i + EMBED_BATCH]
             marks = ",".join("?" for _ in batch_ids)
             rows = [dict(r) for r in conn.execute(
-                f"SELECT id,url,name,source,description,tags FROM skills WHERE id IN ({marks})",
+                f"SELECT id,url,name,source,description,tags FROM skills "
+                f"WHERE id IN ({marks}) AND COALESCE(quality_status, 'active') = 'active'",
                 batch_ids,
             )]
             for d in rows:
@@ -163,7 +170,7 @@ async def main() -> None:
         stale = scan_stale(library)
         print(f"pass 2: {len(stale)} rows need (re-)embedding", flush=True)
         done = await refresh(client, library, stale)
-        print(f"done — {done} rows re-embedded", flush=True)
+        print(f"done - {done} rows re-embedded", flush=True)
 
 
 if __name__ == "__main__":

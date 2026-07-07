@@ -1,0 +1,10 @@
+dbs:
+  - path: /data/local_skills.db
+    replicas:
+      - type: s3
+        endpoint: ${R2_ENDPOINT}
+        bucket: ${R2_BUCKET}
+        path: local_skills.db
+        region: auto
+        retention: 72h
+        snapshot-interval: 24h

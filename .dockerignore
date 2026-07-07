@@ -1,0 +1,11 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.log
+local_skills.db
+local_skills.db-wal
+local_skills.db-shm
+migrate_state.json
+skills_library
+.claude

@@ -4,7 +4,7 @@ Uses the exact ONNX weights the Supabase Edge runtime runs
 (huggingface.co/Supabase/gte-small, onnx/model_quantized.onnx) so document
 embeddings written by this machine and query embeddings computed at the edge
 live in the same vector space. Mean-pooled over the attention mask, then
-L2-normalized — matching session.run(text, {mean_pool: true, normalize: true}).
+L2-normalized, matching session.run(text, {mean_pool: true, normalize: true}).
 """
 import hashlib
 import json
@@ -108,16 +108,32 @@ class LibraryContent:
         self.library_dir = library_dir or Path(__file__).parent / "skills_library"
         self.files_dir = self.library_dir / "files"
         self._index: dict[str, str] = {}
+        self._hash_index: dict[str, str] = {}
         index_path = self.library_dir / "index.json"
         if index_path.exists():
             try:
                 raw = json.loads(index_path.read_text(encoding="utf-8"))
                 self._index = {url: entry.get("file", "") for url, entry in raw.items() if entry.get("file")}
+                self._hash_index = {
+                    entry.get("content_hash", ""): entry.get("file", "")
+                    for entry in raw.values()
+                    if entry.get("content_hash") and entry.get("file")
+                }
             except Exception:
                 self._index = {}
+                self._hash_index = {}
 
     def get(self, url: str) -> str:
         filename = self._index.get(url)
+        if not filename:
+            return ""
+        try:
+            return (self.files_dir / filename).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def get_by_hash(self, hash_value: str) -> str:
+        filename = self._hash_index.get(hash_value)
         if not filename:
             return ""
         try:

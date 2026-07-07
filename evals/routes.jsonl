@@ -1,0 +1,4 @@
+{"id":"trap-landingi-001","prompt":"build a landing page for an AI automation agency","expected_tier":"hint|none","allowed_skills":[],"forbidden_skills":["sales-landingi"],"tags":["platform-trap","landing-page"]}
+{"id":"explicit-landingi-001","prompt":"build a landing page on Landingi for an AI automation agency","expected_tier":"full|hint","allowed_skills":["sales-landingi"],"forbidden_skills":[],"tags":["platform-explicit","landing-page"]}
+{"id":"negative-ack-001","prompt":"thanks that worked great","expected_tier":"none","allowed_skills":[],"forbidden_skills":["*"],"tags":["negative","ack"]}
+{"id":"direct-slack-001","prompt":"send slack messages from my agent","expected_tier":"full|hint","allowed_skills":["slack"],"forbidden_skills":[],"tags":["direct-hit","platform-explicit"]}

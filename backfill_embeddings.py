@@ -27,6 +27,7 @@ async def fetch_unembedded(client: httpx.AsyncClient) -> list[dict]:
             "select": "id,url,name,source,description,tags",
             "embedding": "is.null",
             "url": "not.is.null",
+            "quality_status": "eq.active",
             # Descending: the scraper's embed loop drains ascending, so a
             # concurrent backfill works the other end instead of racing it.
             "order": "id.desc",
@@ -84,7 +85,7 @@ async def main():
             total += len(rows)
             print(f"embedded {total} skills...", flush=True)
 
-    print(f"done — {total} skills embedded this run")
+    print(f"done - {total} skills embedded this run")
 
 
 if __name__ == "__main__":

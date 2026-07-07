@@ -18,19 +18,22 @@ so freshly scraped skills become semantically searchable within minutes.
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from embeddings import LibraryContent, build_embed_text, embed_text_hash, embed_texts
+from quality import CONFIG_VERSION, content_hash, rerank_candidates, tier_for_prompt
 
 # Storage moved local 2026-07-05 -- recommender.py always runs embedded inside
 # scraper.py's process (same app/port), which now serves local_api.py's
 # Supabase-shaped REST+RPC surface backed by local_skills.db.
-SUPABASE_URL = f"http://127.0.0.1:{os.getenv('LOCAL_DB_PORT', '8000')}"
+SUPABASE_URL = os.getenv("LOCAL_DB_URL", f"http://127.0.0.1:{os.getenv('LOCAL_DB_PORT', '8000')}").rstrip("/")
 HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "resolution=merge-duplicates",
@@ -38,10 +41,15 @@ HEADERS = {
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+ENABLE_OLLAMA_CHAT = os.getenv("ENABLE_OLLAMA_CHAT", "").lower() in {"1", "true", "yes"}
+AUTO_START_EMBEDDER = os.getenv("AUTO_START_EMBEDDER", "1").lower() not in {"0", "false", "no"}
 
 # RRF scores cluster near 1/(rrf_k + ix), so near-ties sit ~1.0x apart; a top hit
 # that both retrievers agree on lands well above 1.6x the runner-up.
 RECOMMEND_GAP = 1.6
+ROUTE_TTL_SECONDS = int(os.getenv("ROUTE_TTL_SECONDS", "300"))
+MAX_INLINE_CONTENT_CHARS = int(os.getenv("MAX_INLINE_CONTENT_CHARS", "12000"))
+CONTENT_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 EMBED_INTERVAL_SECONDS = int(os.getenv("EMBED_INTERVAL_SECONDS", "300"))
 EMBED_PAGE_SIZE = 500
 EMBED_BATCH = 128
@@ -66,6 +74,7 @@ async def embed_missing_skills(client: httpx.AsyncClient) -> int:
                 "select": "id,url,name,source,description,tags",
                 "embedding": "is.null",
                 "url": "not.is.null",
+                "quality_status": "eq.active",
                 "order": "id.asc",
                 "limit": str(EMBED_PAGE_SIZE),
             },
@@ -132,7 +141,8 @@ async def _embed_backlog_loop():
 
 @router.on_event("startup")
 async def _start_embed_loop():
-    asyncio.create_task(_embed_backlog_loop())
+    if AUTO_START_EMBEDDER:
+        asyncio.create_task(_embed_backlog_loop())
     asyncio.create_task(_warm_embedding_model())
 
 
@@ -184,28 +194,17 @@ def _passes_similarity_floor(results: list[dict]) -> bool:
     return max(sims) >= MIN_SIMILARITY
 
 
-def injection_tier(results: list[dict]) -> str:
+def injection_tier(query_text: str, results: list[dict]) -> str:
     """Decide how much of the top result to hand to a caller.
 
-    Only "none" is decided here (the similarity floor). "full" vs. "hint" is
-    NOT: an earlier version used the RRF top1/top2 gap (_heuristic_response's
-    RECOMMEND_GAP) to guess at ambiguity, but calibration against
-    eval_search.py's 30 cases (2026-07-07) showed the gap is a smooth
-    continuum from 1.00 to 3.07 with no separating cluster -- "manage my
-    kubernetes cluster" (1.02x) is not meaningfully more "ambiguous" than
-    "browse and query github repositories" (1.11x); both just have several
-    decent near-duplicate skills, which is normal in a 350k-skill corpus, not
-    a sign the top pick is untrustworthy. Gating on that ratio meant 28/30
-    real tasks downgraded to a hint that never gets applied.
-    Whether a top pick is *safe* to auto-apply is a content question, not a
-    ranking one -- see _is_stub_content / _is_unconfirmed_action_content in
-    the auto-skill-connector repo, which is what actually caught the one real
-    incident (an unconfirmed-action skill), and still runs downstream of this
-    for every "full" decision.
+    The similarity floor rejects junk/meta prompts. Full vs. hint is then a
+    deterministic quality/platform decision, not an RRF-gap heuristic: eval
+    evidence showed the RRF gap is a smooth continuum and wrongly downgraded
+    many real tasks, while platform traps need a hard cap.
     """
     if not results or not _passes_similarity_floor(results):
         return "none"
-    return "full"
+    return tier_for_prompt(query_text, results, RECOMMEND_GAP)
 
 
 async def retrieve_skills(client: httpx.AsyncClient, query_text: str, limit: int = 10) -> list[dict]:
@@ -213,19 +212,20 @@ async def retrieve_skills(client: httpx.AsyncClient, query_text: str, limit: int
     corpus was fully migrated into local_skills.db (migrate_state.json:
     202,367 rows on 2026-07-05), so local is the single source of truth.
     Falls back to pure FTS if embedding fails."""
-    body = {"query_text": query_text, "match_count": limit}
+    fetch_limit = max(limit, 20)
+    body = {"query_text": query_text, "match_count": fetch_limit}
     try:
         body["query_embedding"] = await embed_query(query_text)
         rpc = "hybrid_search_skills"
     except Exception:
         rpc = "search_skills"
-        body = {"query": query_text, "max_results": limit}
+        body = {"query": query_text, "max_results": fetch_limit}
 
     r = await client.post(f"{SUPABASE_URL}/rest/v1/rpc/{rpc}", json=body, headers=HEADERS, timeout=20)
     if r.status_code != 200:
         return []
     results = list(r.json())
-    results.sort(key=lambda row: row.get("rank", 0), reverse=True)
+    results = rerank_candidates(query_text, results)
     return results[:limit]
 
 
@@ -236,7 +236,10 @@ async def fetch_skills_by_urls(client: httpx.AsyncClient, urls: list[str]) -> li
     r = await client.get(
         f"{SUPABASE_URL}/rest/v1/skills",
         params={
-            "select": "id,name,description,source,url,tags,risk_score,risk_flags,raw",
+            "select": (
+                "id,name,description,source,url,tags,risk_score,risk_flags,raw,"
+                "content_hash,quality_status,quality_score,platforms,category"
+            ),
             "url": f"in.({quoted})",
         },
         headers=HEADERS,
@@ -258,6 +261,8 @@ _ollama_probe = {"at": 0.0, "up": False}
 
 
 async def ollama_available(client: httpx.AsyncClient) -> bool:
+    if not ENABLE_OLLAMA_CHAT:
+        return False
     now = time.monotonic()
     if now - _ollama_probe["at"] < 60:
         return _ollama_probe["up"]
@@ -325,7 +330,7 @@ CHOOSE_SCHEMA = {
     "required": ["action", "reply"],
 }
 
-CHOOSE_SYSTEM = """You are a recommender for Claude Code skills / MCP servers. Given the user's task and a JSON list of candidate skills, pick the single best fit.
+CHOOSE_SYSTEM = """You are a recommender for Claude Code skills / MCP servers. Given the user's task and a JSON list of candidate skills, pick a usable fit only when one is clearly relevant.
 Output JSON:
 - action: "recommend" when one candidate clearly fits the task; "clarify" when several fit about equally; "none" when nothing genuinely fits.
 - chosen_url: the url of the recommended candidate (required for recommend).
@@ -341,8 +346,16 @@ class ChatRequest(BaseModel):
     prev_options: list[str] = []
 
 
+class RouteRequest(BaseModel):
+    prompt: str | None = None
+    task: str | None = None
+    client: str = ""
+    client_version: str = ""
+    limit: int = 8
+
+
 NONE_MESSAGE = ("I couldn't find anything matching that. Try describing the task with "
-                "different words — e.g. the tool, file type, or service involved.")
+                "different words - e.g. the tool, file type, or service involved.")
 
 
 def _blurb(skill: dict) -> str:
@@ -352,18 +365,20 @@ def _blurb(skill: dict) -> str:
     if skill.get("stars"):
         parts.append(f"({skill['stars']} GitHub stars)")
     if (skill.get("risk_score") or 0) > 0:
-        parts.append(f"Note: the malware scan gave this a low-level risk score of {skill['risk_score']} — review it before installing.")
+        parts.append(f"Note: the malware scan gave this a low-level risk score of {skill['risk_score']} - review it before installing.")
     return " ".join(parts)
 
 
 def _heuristic_response(candidates: list[dict]) -> dict:
     top = candidates[0]
     runner_up = candidates[1] if len(candidates) > 1 else None
-    if runner_up is None or top.get("rank", 0) >= runner_up.get("rank", 0) * RECOMMEND_GAP:
+    top_score = top.get("route_score", top.get("rank", 0))
+    runner_score = runner_up.get("route_score", runner_up.get("rank", 0)) if runner_up else 0
+    if runner_up is None or top_score >= runner_score * RECOMMEND_GAP:
         return {"type": "recommend", "skill": top, "message": _blurb(top)}
     return {
         "type": "clarify",
-        "message": "A few skills fit that about equally well — which of these is closest to what you're doing? Pick one, or describe your task in a bit more detail.",
+        "message": "A few skills fit that about equally well - which of these is closest to what you're doing? Pick one, or describe your task in a bit more detail.",
         "options": candidates[:3],
     }
 
@@ -456,18 +471,143 @@ async def chat_recommend(body: ChatRequest):
         return _heuristic_response(candidates)
 
 
+def _public_skill(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {
+        "id": row.get("id"),
+        "slug": row.get("name"),
+        "name": row.get("name"),
+        "summary": row.get("description"),
+        "description": row.get("description"),
+        "source": row.get("source"),
+        "source_url": row.get("url"),
+        "url": row.get("url"),
+        "content_hash": row.get("content_hash"),
+        "quality_status": row.get("quality_status"),
+        "quality_score": row.get("quality_score"),
+        "platforms": row.get("platforms") or [],
+        "category": row.get("category"),
+        "risk_score": row.get("risk_score"),
+        "rank": row.get("rank"),
+        "route_score": row.get("route_score"),
+        "similarity": row.get("similarity"),
+    }
+
+
+def _score_debug(results: list[dict], tier: str) -> dict:
+    if not results:
+        return {"tier": tier, "reason": "no-results"}
+    top = results[0]
+    runner = results[1] if len(results) > 1 else None
+    top_score = float(top.get("route_score") or top.get("rank") or 0.0)
+    runner_score = float(runner.get("route_score") or runner.get("rank") or 0.0) if runner else 0.0
+    return {
+        "tier": tier,
+        "top_route_score": top_score,
+        "runner_route_score": runner_score,
+        "margin": round(top_score - runner_score, 6),
+        "lexical_overlap": top.get("lexical_overlap"),
+        "platform_mismatch": bool(top.get("platform_mismatch")),
+        "similarity": top.get("similarity"),
+        "quality_status": top.get("quality_status"),
+        "quality_score": top.get("quality_score"),
+        "recommend_gap": RECOMMEND_GAP,
+        "min_similarity": MIN_SIMILARITY,
+    }
+
+
+def _library_content_by_hash(target_hash: str) -> str:
+    if not target_hash or not CONTENT_HASH_RE.match(target_hash):
+        return ""
+    return LibraryContent().get_by_hash(target_hash)
+
+
+@router.get("/content/{hash_value}")
+async def get_content(hash_value: str):
+    text = await asyncio.to_thread(_library_content_by_hash, hash_value)
+    if not text:
+        return Response(status_code=404)
+    return PlainTextResponse(
+        text,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.post("/route")
+async def route(body: RouteRequest):
+    """Deterministic backend-owned route contract for connectors."""
+    query = (body.task or body.prompt or "").strip()
+    if not query:
+        return {
+            "tier": "none",
+            "skill": None,
+            "content": None,
+            "content_url": None,
+            "score_debug": {"tier": "none", "reason": "empty-query"},
+            "config_version": CONFIG_VERSION,
+            "ttl": ROUTE_TTL_SECONDS,
+        }
+
+    limit = max(2, min(int(body.limit or 8), 20))
+    async with httpx.AsyncClient() as client:
+        results = await retrieve_skills(client, query, limit)
+
+    tier = injection_tier(query, results)
+    warnings: list[str] = []
+    content = None
+    content_url = None
+    skill = _public_skill(results[0]) if results else None
+
+    if tier == "full" and skill:
+        library = LibraryContent()
+        text = library.get(skill.get("url") or "")
+        if not text:
+            tier = "hint"
+            warnings.append("Matched skill has no locally stored SKILL.md content; downgraded to hint.")
+        elif len(text) > MAX_INLINE_CONTENT_CHARS:
+            tier = "hint"
+            chash = skill.get("content_hash") or content_hash(text)
+            content_url = f"/content/{chash}" if chash else None
+            warnings.append("Matched skill content exceeds inline size cap; downgraded to hint.")
+        else:
+            content = text
+            chash = skill.get("content_hash") or content_hash(text)
+            if chash:
+                skill["content_hash"] = chash
+                content_url = f"/content/{chash}"
+
+    debug = _score_debug(results, tier)
+    if warnings:
+        debug["warnings"] = warnings
+    return {
+        "tier": tier,
+        "skill": skill,
+        "content": content,
+        "content_url": content_url,
+        "score_debug": debug,
+        "config_version": CONFIG_VERSION,
+        "ttl": ROUTE_TTL_SECONDS,
+    }
+
+
 @router.get("/find-semantic")
 async def find_semantic(q: str, limit: int = 8, gate: bool = True):
     """Hybrid-ranked results, plus a `tier` a caller can act on directly:
       "full" -> inject the top result's whole skill content
       "hint" -> surface just its name/url, several candidates are plausible
       "none" -> nothing cleared the bar; do not inject anything
-    With gate=true (default), a "none" tier also empties `results` — pass
+    With gate=true (default), a "none" tier also empties `results` - pass
     gate=false for debugging/eval of raw rankings regardless of tier."""
     async with httpx.AsyncClient() as client:
         results = await retrieve_skills(client, q, limit)
-    tier = injection_tier(results)
+    tier = injection_tier(q, results)
     if gate and tier == "none":
         return {"query": q, "results": [], "tier": tier, "gated": True,
-                "message": f"No result cleared the similarity floor ({MIN_SIMILARITY})."}
-    return {"query": q, "results": results, "tier": tier}
+                "message": f"No result cleared the similarity floor ({MIN_SIMILARITY}).",
+                "score_debug": _score_debug(results, tier),
+                "config_version": CONFIG_VERSION}
+    return {"query": q, "results": results, "tier": tier,
+            "score_debug": _score_debug(results, tier),
+            "config_version": CONFIG_VERSION}
