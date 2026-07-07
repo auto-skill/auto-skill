@@ -168,6 +168,32 @@ def _passes_similarity_floor(results: list[dict]) -> bool:
     return max(sims) >= MIN_SIMILARITY
 
 
+def injection_tier(results: list[dict]) -> str:
+    """Decide how much of the top result to hand to a caller.
+
+    Top-1 cosine similarity alone doesn't separate "one obviously right skill"
+    from "several plausible skills" -- sampled on this corpus, both a sharp
+    match ("send slack messages from claude", 0.946) and a vague one ("make
+    something cool for my friend", 0.836, itself below the floor) land in a
+    narrow band; a specific-but-crowded query ("set up automation for my
+    workflow", 0.934) scores just as high as a clean single-skill match. What
+    *does* separate them is whether the fused hybrid rank agrees: reuses the
+    same RRF-gap heuristic _heuristic_response already uses for /chat's
+    recommend-vs-clarify split.
+
+    Returns "full" (inject the whole skill), "hint" (name + one-liner only,
+    the match exists but multiple candidates are plausible), or "none".
+    """
+    if not results or not _passes_similarity_floor(results):
+        return "none"
+    if len(results) == 1:
+        return "full"
+    top, runner_up = results[0].get("rank", 0), results[1].get("rank", 0)
+    if runner_up <= 0 or top >= runner_up * RECOMMEND_GAP:
+        return "full"
+    return "hint"
+
+
 async def retrieve_skills(client: httpx.AsyncClient, query_text: str, limit: int = 10) -> list[dict]:
     """Hybrid FTS+vector retrieval against the local DB. The frozen Supabase
     corpus was fully migrated into local_skills.db (migrate_state.json:
@@ -418,12 +444,16 @@ async def chat_recommend(body: ChatRequest):
 
 @router.get("/find-semantic")
 async def find_semantic(q: str, limit: int = 8, gate: bool = True):
-    """Hybrid-ranked results. With gate=true (default), queries whose best
-    vector hit falls below MIN_SIMILARITY return an empty list instead of
-    noise — pass gate=false for debugging/eval of raw rankings."""
+    """Hybrid-ranked results, plus a `tier` a caller can act on directly:
+      "full" -> inject the top result's whole skill content
+      "hint" -> surface just its name/url, several candidates are plausible
+      "none" -> nothing cleared the bar; do not inject anything
+    With gate=true (default), a "none" tier also empties `results` — pass
+    gate=false for debugging/eval of raw rankings regardless of tier."""
     async with httpx.AsyncClient() as client:
         results = await retrieve_skills(client, q, limit)
-    if gate and not _passes_similarity_floor(results):
-        return {"query": q, "results": [], "gated": True,
+    tier = injection_tier(results)
+    if gate and tier == "none":
+        return {"query": q, "results": [], "tier": tier, "gated": True,
                 "message": f"No result cleared the similarity floor ({MIN_SIMILARITY})."}
-    return {"query": q, "results": results}
+    return {"query": q, "results": results, "tier": tier}
