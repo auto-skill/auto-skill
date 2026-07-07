@@ -133,6 +133,22 @@ async def _embed_backlog_loop():
 @router.on_event("startup")
 async def _start_embed_loop():
     asyncio.create_task(_embed_backlog_loop())
+    asyncio.create_task(_warm_embedding_model())
+
+
+async def _warm_embedding_model() -> None:
+    """Load the ONNX model + tokenizer and run one throwaway embed at
+    startup instead of on the first real request. embeddings._load() is
+    lazy, so without this the first /find-semantic call after any restart
+    pays the full model-load cost inline -- the hook's UserPromptSubmit
+    timeout is 3s, well under what a cold load takes, so that first prompt
+    would silently get no routing at all."""
+    start = time.monotonic()
+    try:
+        await asyncio.to_thread(embed_texts, ["warm-up query for model load"])
+        print(f"[recommender] embedding model warmed in {time.monotonic() - start:.1f}s")
+    except Exception as e:
+        print(f"[recommender] embedding model warm-up failed (will load lazily on first request): {e}")
 
 
 # --- Retrieval ------------------------------------------------------------
