@@ -30,6 +30,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 # web search. Left unset, scrape_web_search() is skipped entirely.
 SEARXNG_URL = os.getenv("SEARXNG_URL", "").rstrip("/")
 SCRAPE_INTERVAL_SECONDS = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "900"))
+STALE_SCRAPE_RUN_SECONDS = int(os.getenv("STALE_SCRAPE_RUN_SECONDS", "7200"))
 AUTO_START_SCRAPER = os.getenv("AUTO_START_SCRAPER", "1").lower() not in {"0", "false", "no"}
 
 app = FastAPI()
@@ -83,6 +84,10 @@ app.mount("/library/files", StaticFiles(directory=_library_files_dir), name="lib
 scrape_task = None
 
 
+class ScrapeAlreadyRunning(RuntimeError):
+    """Raised when another fresh scrape run is already active."""
+
+
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "service": "auto-skill-api"}
@@ -107,7 +112,8 @@ async def readyz():
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=503)
 
-    status_code = 200 if counts["total_skills"] > 0 else 503
+    ready = counts["total_skills"] > 0 and counts["active_skills"] > 0 and counts["embedded_skills"] > 0
+    status_code = 200 if ready else 503
     return JSONResponse({"ok": status_code == 200, **counts}, status_code=status_code)
 
 
@@ -1620,6 +1626,28 @@ async def run_scrape(run_id: str):
 
 async def start_new_scrape_run() -> str:
     async with httpx.AsyncClient() as client:
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(seconds=STALE_SCRAPE_RUN_SECONDS)).isoformat()
+        await client.patch(
+            f"{SUPABASE_URL}/rest/v1/scrape_runs",
+            params={"status": "eq.running", "started_at": f"lt.{cutoff}"},
+            json={
+                "finished_at": now.isoformat(),
+                "status": "stale",
+                "error": f"Marked stale before starting a new run after {STALE_SCRAPE_RUN_SECONDS}s.",
+            },
+            headers=HEADERS,
+        )
+        active = await supabase_get(
+            client,
+            "scrape_runs",
+            f"status=eq.running&started_at=gt.{cutoff}&order=started_at.desc&limit=1",
+        )
+        if isinstance(active, list) and active:
+            run = active[0]
+            raise ScrapeAlreadyRunning(
+                f"Scrape already running: {run.get('id')} started_at={run.get('started_at')}"
+            )
         r = await supabase_post(client, "scrape_runs", {"status": "running"})
         run = r.json()
         return run[0]["id"] if isinstance(run, list) else run.get("id")
@@ -1631,7 +1659,10 @@ async def start_scrape():
     if scrape_task and not scrape_task.done():
         return {"error": "Scrape already running"}
 
-    run_id = await start_new_scrape_run()
+    try:
+        run_id = await start_new_scrape_run()
+    except ScrapeAlreadyRunning as exc:
+        return {"error": str(exc), "status": "already_running"}
     scrape_task = asyncio.create_task(run_scrape(run_id))
     return {"run_id": run_id, "status": "started"}
 
@@ -1823,20 +1854,6 @@ async def start_rescan():
         return {"error": "Rescan already running", "progress": rescan_progress}
     rescan_task = asyncio.create_task(run_rescan())
     return {"status": "started"}
-
-
-@app.get("/healthz")
-async def healthz():
-    """Lightweight liveness/readiness check for uptime monitoring -- unlike
-    /status, does no external calls and no heavy DB scans, just confirms the
-    process is up and the local DB is reachable. Cheap enough to poll often."""
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(f"{SUPABASE_URL}/rest/v1/skills?select=id&limit=1", headers=HEADERS, timeout=5)
-        db_ok = r.status_code == 200
-    except Exception:
-        db_ok = False
-    return {"ok": db_ok, "db_reachable": db_ok}
 
 
 @app.get("/status")

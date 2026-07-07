@@ -344,6 +344,8 @@ def tier_for_prompt(prompt: str, candidates: list[dict[str, Any]], recommend_gap
         return "hint"
 
     sim_values = [float(r.get("similarity") or 0.0) for r in ranked if r.get("similarity") is not None]
+    if not sim_values:
+        return "hint"
     if sim_values and max(sim_values) < 0.87:
         return "none"
 

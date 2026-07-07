@@ -8,12 +8,26 @@
 4. Run `python reindex.py` to refresh active embeddings.
 5. Start the API and verify:
    - `GET /healthz` returns `{"ok": true}`.
-   - `GET /readyz` returns `ok=true` and nonzero row counts.
-   - `POST /route` returns `hint` or `none` for:
-     `build a landing page for an AI automation agency`.
+   - `GET /readyz` returns `ok=true` with nonzero total, active, and embedded
+     row counts.
+   - `POST /route` for `create an excel spreadsheet report with formulas and
+     charts` returns `full` or `hint`.
+   - `POST /route` for `build a landing page for an AI automation agency` does
+     not full-route to a Landingi-specific skill.
 6. Confirm public forwarded requests cannot reach write endpoints:
    `/scrape`, `/rescan`, `/normalize-db`, and mutating `/rest/v1/*` should be
    blocked by the read-only guard when forwarded through Cloudflare.
+7. Run the launch preflight:
+
+```powershell
+python launch_check.py --base-url https://skills.yourdomain.com
+```
+
+For a local dry run before the API is running:
+
+```powershell
+python launch_check.py --skip-http --skip-docker --skip-env
+```
 
 ## Docker Compose Skeleton
 
@@ -70,10 +84,30 @@ On Windows, after downloading restored artifacts:
 ## Health And Readiness
 
 - `/healthz` is for uptime checks: process responding.
-- `/readyz` is for serving readiness: DB reachable and nonempty.
+- `/readyz` is for serving readiness: DB reachable with at least one total,
+  active, and embedded skill row.
 
 Use `/healthz` for container health checks and `/readyz` for deployment
 promotion checks.
+
+## Scraper Supervision
+
+The compose setup runs scraping in the `worker` service only. Keep
+`AUTO_START_SCRAPER=0` on the public API so accidental API restarts do not
+start extra scrapes.
+
+Before a worker starts a new run it marks `running` rows older than
+`STALE_SCRAPE_RUN_SECONDS` as `stale`, then refuses to start if a fresh
+`running` row already exists. If `/status` shows several fresh running rows,
+more than one scraper process is active; stop the extra process before
+trusting the run counts.
+
+After stopping the extra process, clean up stale bookkeeping rows:
+
+```powershell
+python cleanup_scrape_runs.py
+python cleanup_scrape_runs.py --apply
+```
 
 ## Known Alpha Limits
 

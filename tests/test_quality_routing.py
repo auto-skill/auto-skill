@@ -114,6 +114,20 @@ class RoutingTierTests(unittest.TestCase):
 
         self.assertEqual(tier_for_prompt(prompt, [candidate]), "hint")
 
+    def test_no_similarity_never_full_routes(self):
+        prompt = "create an excel report with formulas"
+        candidate = {
+            "name": "spreadsheet-reporter",
+            "description": "Build spreadsheet reports with formulas and charts.",
+            "tags": ["spreadsheet", "excel"],
+            "platforms": [],
+            "quality_status": "active",
+            "quality_score": 90,
+            "rank": 1.0,
+        }
+
+        self.assertEqual(tier_for_prompt(prompt, [candidate]), "hint")
+
 
 if __name__ == "__main__":
     unittest.main()

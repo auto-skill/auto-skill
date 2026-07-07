@@ -9,6 +9,7 @@ services:
       AUTO_START_SCRAPER: "0"
       AUTO_START_EMBEDDER: "0"
       ENABLE_OLLAMA_CHAT: "0"
+      STALE_SCRAPE_RUN_SECONDS: ${STALE_SCRAPE_RUN_SECONDS:-7200}
     volumes:
       - ../data:/data
       - ../skills_library:/app/skills_library
@@ -32,6 +33,7 @@ services:
       AUTO_START_SCRAPER: "0"
       AUTO_START_EMBEDDER: "0"
       SCRAPE_INTERVAL_SECONDS: "900"
+      STALE_SCRAPE_RUN_SECONDS: ${STALE_SCRAPE_RUN_SECONDS:-7200}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       SEARXNG_URL: ${SEARXNG_URL:-}
     volumes:

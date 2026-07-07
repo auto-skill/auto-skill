@@ -16,7 +16,7 @@ python scraper.py
 Useful endpoints:
 
 - `GET /healthz` - process is up.
-- `GET /readyz` - SQLite is reachable and has rows.
+- `GET /readyz` - SQLite is reachable with active embedded rows.
 - `GET /find-semantic?q=...` - ranked search with `tier`, `score_debug`, and
   `config_version`.
 - `POST /route {"task":"..."}` - backend-owned full/hint/none route contract.
@@ -40,6 +40,7 @@ Backfill existing rows before using public routing:
 ```powershell
 python backfill_quality.py
 python reindex.py
+python launch_check.py --base-url http://127.0.0.1:8000
 ```
 
 ## Routing Policy

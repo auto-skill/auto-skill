@@ -553,6 +553,7 @@ async def route(body: RouteRequest):
     limit = max(2, min(int(body.limit or 8), 20))
     async with httpx.AsyncClient() as client:
         results = await retrieve_skills(client, query, limit)
+    results = rerank_candidates(query, results)
 
     tier = injection_tier(query, results)
     warnings: list[str] = []
