@@ -39,7 +39,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # headers while genuinely local callers (scraper itself, recommender, hook,
 # mcp_server) do not. Public callers get search/read endpoints only -- the
 # local REST surface has no auth, so every write path must stay loopback-only.
-PUBLIC_GET_PATHS = {"/", "/status", "/find-semantic", "/skills", "/library", "/rest/v1/skills"}
+PUBLIC_GET_PATHS = {"/", "/status", "/find-semantic", "/skills", "/library", "/rest/v1/skills", "/healthz"}
 PUBLIC_POST_RE = re.compile(r"^(/chat|/rest/v1/rpc/(search_skills|vector_search_skills|hybrid_search_skills))$")
 
 
@@ -1743,6 +1743,20 @@ async def start_rescan():
         return {"error": "Rescan already running", "progress": rescan_progress}
     rescan_task = asyncio.create_task(run_rescan())
     return {"status": "started"}
+
+
+@app.get("/healthz")
+async def healthz():
+    """Lightweight liveness/readiness check for uptime monitoring -- unlike
+    /status, does no external calls and no heavy DB scans, just confirms the
+    process is up and the local DB is reachable. Cheap enough to poll often."""
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{SUPABASE_URL}/rest/v1/skills?select=id&limit=1", headers=HEADERS, timeout=5)
+        db_ok = r.status_code == 200
+    except Exception:
+        db_ok = False
+    return {"ok": db_ok, "db_reachable": db_ok}
 
 
 @app.get("/status")
