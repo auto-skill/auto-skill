@@ -60,6 +60,10 @@ python eval_search.py --json-out eval-results/latest.json
 python eval_compare.py eval-results/before.json eval-results/latest.json
 ```
 
+Internal route benchmark cases live in `evals/routes.jsonl`. Add false
+positives, direct hits, and conversation/meta negatives there so behavior
+changes show up in snapshots without editing Python.
+
 ## Routing Policy
 
 Runtime routing is deterministic. It uses local embeddings for retrieval, then

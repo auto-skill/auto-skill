@@ -141,6 +141,10 @@ python eval_search.py --json-out eval-results\$(Get-Date -Format yyyyMMdd-HHmmss
 python eval_compare.py --fail-on-regression eval-results\before.json eval-results\after.json
 ```
 
+Route benchmark cases come from `evals\routes.jsonl`. Add cases there for
+observed false positives, obvious direct-hit tasks, and conversation/meta
+prompts that should stay at `none`.
+
 Route outcome feedback is also local-only:
 
 ```powershell

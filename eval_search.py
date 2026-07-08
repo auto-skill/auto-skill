@@ -133,12 +133,111 @@ ROUTE_LATENCY_BUDGET_MS = int(os.getenv("ROUTE_LATENCY_BUDGET_MS", "1500"))
 ROUTE_SKILL_FIND_BUDGET_MS = int(os.getenv("ROUTE_SKILL_FIND_BUDGET_MS", "1200"))
 ROUTE_RESPONSE_TOKEN_BUDGET = int(os.getenv("ROUTE_RESPONSE_TOKEN_BUDGET", "3500"))
 ROUTE_INJECTED_TOKEN_BUDGET = int(os.getenv("ROUTE_INJECTED_TOKEN_BUDGET", "3000"))
+DEFAULT_ROUTE_CASES_PATH = Path("evals") / "routes.jsonl"
 
-ROUTE_CASES = [
-    ("spreadsheet full route", "create an excel spreadsheet report with formulas and charts", {"full", "hint"}, 0),
-    ("landing page platform trap", "build a landing page for an AI automation agency", {"hint", "none", "full"}, 2),
-    ("acknowledgement/meta prompt", "ok sounds good lets do it", {"none", "hint"}, 0),
-]
+
+def _split_expected_tiers(value) -> set[str]:
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = str(value or "full|hint|none").split("|")
+    return {str(item).strip().lower() for item in raw if str(item).strip()}
+
+
+def _load_route_cases(path: Path) -> list[dict]:
+    cases: list[dict] = []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        try:
+            raw = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{lineno}: invalid JSON: {exc}") from exc
+        prompt = str(raw.get("prompt") or raw.get("query") or "").strip()
+        if not prompt:
+            raise ValueError(f"{path}:{lineno}: missing prompt")
+        case_id = str(raw.get("id") or f"case-{lineno}").strip()
+        cases.append(
+            {
+                "id": case_id,
+                "label": str(raw.get("label") or case_id),
+                "query": prompt,
+                "expected_tiers": _split_expected_tiers(raw.get("expected_tier") or raw.get("expected_tiers")),
+                "allowed_skills": [str(v).lower() for v in raw.get("allowed_skills", [])],
+                "forbidden_skills": [str(v).lower() for v in raw.get("forbidden_skills", [])],
+                "min_hint_candidates": int(raw.get("min_hint_candidates") or 0),
+                "tags": [str(v) for v in raw.get("tags", [])],
+            }
+        )
+    if not cases:
+        raise ValueError(f"{path}: no route benchmark cases found")
+    return cases
+
+
+def _skill_text(value) -> str:
+    if not isinstance(value, dict):
+        return ""
+    return " ".join(
+        str(value.get(key) or "")
+        for key in ("name", "slug", "description", "url", "source_url")
+    ).lower()
+
+
+def _evaluate_route_case(case: dict, status_code: int, body: dict) -> dict:
+    tier = str(body.get("tier") or "none").lower()
+    skill = body.get("skill") if isinstance(body.get("skill"), dict) else {}
+    candidates = body.get("candidates") if isinstance(body.get("candidates"), list) else []
+    metrics = ((body.get("score_debug") or {}).get("metrics") or {})
+    latency_ms = int(metrics.get("latency_ms") or 0)
+    skill_find_ms = int(metrics.get("skill_find_ms") or metrics.get("retrieval_ms") or 0)
+    injected_tokens = int(metrics.get("injected_tokens") or metrics.get("content_tokens") or 0)
+    response_tokens = int(metrics.get("response_tokens") or 0)
+    candidate_count = len(candidates)
+    surfaced_blob = " ".join([_skill_text(skill)] + [_skill_text(c) for c in candidates])
+
+    failures: list[str] = []
+    if status_code != 200:
+        failures.append(f"status_code={status_code}")
+    if not body.get("route_id"):
+        failures.append("missing route_id")
+    if tier not in case["expected_tiers"]:
+        failures.append(f"tier={tier} not in {sorted(case['expected_tiers'])}")
+    if tier == "hint" and candidate_count < case["min_hint_candidates"]:
+        failures.append(f"candidate_count={candidate_count} below {case['min_hint_candidates']}")
+    if case["allowed_skills"] and not any(needle in surfaced_blob for needle in case["allowed_skills"]):
+        failures.append(f"none of allowed_skills={case['allowed_skills']} surfaced")
+    for needle in case["forbidden_skills"]:
+        if needle == "*" and tier != "none":
+            failures.append("non-none tier matched wildcard forbidden skill")
+        elif needle != "*" and needle in surfaced_blob:
+            failures.append(f"forbidden skill surfaced: {needle}")
+    if latency_ms > ROUTE_LATENCY_BUDGET_MS:
+        failures.append(f"latency_ms={latency_ms} exceeded {ROUTE_LATENCY_BUDGET_MS}")
+    if skill_find_ms > ROUTE_SKILL_FIND_BUDGET_MS:
+        failures.append(f"skill_find_ms={skill_find_ms} exceeded {ROUTE_SKILL_FIND_BUDGET_MS}")
+    if injected_tokens > ROUTE_INJECTED_TOKEN_BUDGET:
+        failures.append(f"injected_tokens={injected_tokens} exceeded {ROUTE_INJECTED_TOKEN_BUDGET}")
+    if response_tokens > ROUTE_RESPONSE_TOKEN_BUDGET:
+        failures.append(f"response_tokens={response_tokens} exceeded {ROUTE_RESPONSE_TOKEN_BUDGET}")
+
+    return {
+        "id": case["id"],
+        "label": case["label"],
+        "query": case["query"],
+        "tags": case["tags"],
+        "status_code": status_code,
+        "tier": tier,
+        "expected_tiers": sorted(case["expected_tiers"]),
+        "skill": skill.get("name") or skill.get("slug"),
+        "latency_ms": latency_ms,
+        "skill_find_ms": skill_find_ms,
+        "injected_tokens": injected_tokens,
+        "response_tokens": response_tokens,
+        "candidate_count": candidate_count,
+        "failures": failures,
+        "ok": not failures,
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -148,6 +247,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="optional path for a machine-readable eval summary",
+    )
+    parser.add_argument(
+        "--route-cases",
+        type=Path,
+        default=DEFAULT_ROUTE_CASES_PATH,
+        help="JSONL route benchmark cases",
     )
     return parser.parse_args()
 
@@ -310,70 +415,42 @@ async def main() -> int:
     # Route contract benchmark: keep correctness, latency, and token churn in
     # one report so routing changes cannot improve relevance while silently
     # becoming too slow or too expensive to inject.
+    route_cases = _load_route_cases(args.route_cases)
     route_ok = 0
     route_case_results = []
     async with httpx.AsyncClient() as client:
-        for label, query, allowed_tiers, min_hint_candidates in ROUTE_CASES:
+        for case in route_cases:
             r = await client.post(
                 f"{SUPABASE_URL}/route",
-                json={"task": query, "client": "eval_search", "client_version": "local"},
+                json={"task": case["query"], "client": "eval_search", "client_version": "local"},
                 timeout=45,
             )
             body = r.json() if r.status_code == 200 else {}
-            tier = body.get("tier", "none")
-            skill = body.get("skill") or {}
-            skill_blob = f"{skill.get('name', '')} {skill.get('url', '')} {skill.get('source_url', '')}".lower()
-            metrics = ((body.get("score_debug") or {}).get("metrics") or {})
-            latency_ms = int(metrics.get("latency_ms") or 0)
-            skill_find_ms = int(metrics.get("skill_find_ms") or metrics.get("retrieval_ms") or 0)
-            injected_tokens = int(metrics.get("injected_tokens") or metrics.get("content_tokens") or 0)
-            response_tokens = int(metrics.get("response_tokens") or 0)
-            candidates = body.get("candidates") if isinstance(body.get("candidates"), list) else []
-            candidate_count = len(candidates)
-            ok = (
-                r.status_code == 200
-                and bool(body.get("route_id"))
-                and tier in allowed_tiers
-                and not (label == "landing page platform trap" and tier == "full" and "landingi" in skill_blob)
-                and (tier != "hint" or candidate_count >= min_hint_candidates)
-                and latency_ms <= ROUTE_LATENCY_BUDGET_MS
-                and skill_find_ms <= ROUTE_SKILL_FIND_BUDGET_MS
-                and injected_tokens <= ROUTE_INJECTED_TOKEN_BUDGET
-                and response_tokens <= ROUTE_RESPONSE_TOKEN_BUDGET
-            )
-            route_ok += ok
-            route_case_results.append({
-                "label": label,
-                "query": query,
-                "status_code": r.status_code,
-                "tier": tier,
-                "skill": skill.get("name") or skill.get("slug"),
-                "latency_ms": latency_ms,
-                "skill_find_ms": skill_find_ms,
-                "injected_tokens": injected_tokens,
-                "response_tokens": response_tokens,
-                "candidate_count": candidate_count,
-                "ok": ok,
-            })
+            result = _evaluate_route_case(case, r.status_code, body)
+            route_ok += result["ok"]
+            route_case_results.append(result)
             print(
                 "  route-bench "
-                f"{'OK ' if ok else 'FAIL'} {label}: tier={tier}, "
-                f"latency_ms={latency_ms}, skill_find_ms={skill_find_ms}, "
-                f"injected_tokens={injected_tokens}, response_tokens={response_tokens}, "
-                f"candidates={candidate_count}"
+                f"{'OK ' if result['ok'] else 'FAIL'} {result['id']}: tier={result['tier']}, "
+                f"latency_ms={result['latency_ms']}, skill_find_ms={result['skill_find_ms']}, "
+                f"injected_tokens={result['injected_tokens']}, response_tokens={result['response_tokens']}, "
+                f"candidates={result['candidate_count']}"
             )
+            for failure in result["failures"]:
+                print(f"    - {failure}")
     print(
-        f"route benchmark: {route_ok}/{len(ROUTE_CASES)} passed "
+        f"route benchmark: {route_ok}/{len(route_cases)} passed "
         f"(latency_budget_ms={ROUTE_LATENCY_BUDGET_MS}, "
         f"skill_find_budget_ms={ROUTE_SKILL_FIND_BUDGET_MS}, "
         f"injected_token_budget={ROUTE_INJECTED_TOKEN_BUDGET}, "
         f"response_token_budget={ROUTE_RESPONSE_TOKEN_BUDGET})"
     )
-    if route_ok != len(ROUTE_CASES):
-        hard_failures += len(ROUTE_CASES) - route_ok
+    if route_ok != len(route_cases):
+        hard_failures += len(route_cases) - route_ok
     summary["route_benchmark"] = {
         "passed": route_ok,
-        "total": len(ROUTE_CASES),
+        "total": len(route_cases),
+        "case_file": str(args.route_cases),
         "cases": route_case_results,
     }
     summary["hard_failures"] = hard_failures

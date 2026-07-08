@@ -1,4 +1,9 @@
 {"id":"trap-landingi-001","prompt":"build a landing page for an AI automation agency","expected_tier":"hint|none","allowed_skills":[],"forbidden_skills":["sales-landingi"],"tags":["platform-trap","landing-page"]}
 {"id":"explicit-landingi-001","prompt":"build a landing page on Landingi for an AI automation agency","expected_tier":"full|hint","allowed_skills":["sales-landingi"],"forbidden_skills":[],"tags":["platform-explicit","landing-page"]}
 {"id":"negative-ack-001","prompt":"thanks that worked great","expected_tier":"none","allowed_skills":[],"forbidden_skills":["*"],"tags":["negative","ack"]}
+{"id":"negative-short-question-001","prompt":"what is cp","expected_tier":"none","allowed_skills":[],"forbidden_skills":["*"],"tags":["negative","short-question"]}
+{"id":"negative-product-chat-001","prompt":"what about the hosting related things online db scraper etc","expected_tier":"none","allowed_skills":[],"forbidden_skills":["*"],"tags":["negative","product-planning"]}
+{"id":"negative-meta-benchmark-001","prompt":"we need a way to see how benchmarks change as we adjust autoskill","expected_tier":"none","allowed_skills":[],"forbidden_skills":["*"],"tags":["negative","meta"]}
 {"id":"direct-slack-001","prompt":"send slack messages from my agent","expected_tier":"full|hint","allowed_skills":["slack"],"forbidden_skills":[],"tags":["direct-hit","platform-explicit"]}
+{"id":"direct-spreadsheet-001","prompt":"create an excel spreadsheet report with formulas and charts","expected_tier":"full|hint","allowed_skills":["excel","spreadsheet","xlsx"],"forbidden_skills":[],"tags":["direct-hit","spreadsheet"]}
+{"id":"direct-browser-qa-001","prompt":"take screenshots of a webpage and inspect the layout","expected_tier":"full|hint","allowed_skills":["browser","screenshot","playwright","puppeteer"],"forbidden_skills":[],"tags":["direct-hit","browser-qa"]}
