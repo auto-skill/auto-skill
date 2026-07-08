@@ -115,6 +115,12 @@ bottleneck.
 Use `top_skills` and `top_used_skills` to spot which routes are valuable,
 over-triggered, or need better skill content.
 
+Archive internal eval snapshots before and after routing changes:
+
+```powershell
+python eval_search.py --json-out eval-results\$(Get-Date -Format yyyyMMdd-HHmmss).json
+```
+
 Route outcome feedback is also local-only:
 
 ```powershell

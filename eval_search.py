@@ -11,12 +11,18 @@ case, and separately exercises the connector-side content-quality gates
 hooks/skill_suggest.py) against synthetic content, since those live in the
 sibling auto-skill-connector repo and can't silently regress unnoticed here.
 
-Run:  python eval_search.py
+Run:
+  python eval_search.py
+  python eval_search.py --json-out eval-results/latest.json
 """
+import argparse
 import asyncio
+import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
@@ -133,6 +139,17 @@ ROUTE_CASES = [
 ]
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Auto-Skill retrieval and route evals.")
+    parser.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="optional path for a machine-readable eval summary",
+    )
+    return parser.parse_args()
+
+
 def is_hit(result: dict, accepts: list[str]) -> bool:
     blob = " ".join([
         result.get("name") or "", result.get("description") or "", result.get("url") or "",
@@ -155,6 +172,21 @@ async def run_engine(client: httpx.AsyncClient, engine: str, query: str, vec: li
 
 
 async def main() -> int:
+    args = parse_args()
+    summary = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "base_url": SUPABASE_URL,
+        "budgets": {
+            "route_latency_ms": ROUTE_LATENCY_BUDGET_MS,
+            "route_response_tokens": ROUTE_RESPONSE_TOKEN_BUDGET,
+        },
+        "engines": {},
+        "retrieval_cases": [],
+        "tier_gate": {},
+        "content_quality": {},
+        "route_benchmark": {},
+        "hard_failures": 0,
+    }
     queries = [q for q, _ in CASES]
     vectors = await asyncio.to_thread(embed_texts, queries)
 
@@ -162,6 +194,7 @@ async def main() -> int:
     async with httpx.AsyncClient() as client:
         for (query, accepts), vec in zip(CASES, vectors):
             line = [query[:44].ljust(46)]
+            case_result = {"query": query, "accepts": accepts, "engines": {}}
             for engine in scores:
                 results = await run_engine(client, engine, query, vec)
                 hit1 = bool(results) and is_hit(results[0], accepts)
@@ -169,27 +202,43 @@ async def main() -> int:
                 scores[engine]["hit1"] += hit1
                 scores[engine]["hit3"] += hit3
                 line.append(f"{engine[:3]}:{'Y' if hit1 else 'y' if hit3 else '.'}")
+                case_result["engines"][engine] = {
+                    "hit1": hit1,
+                    "hit3": hit3,
+                    "top": (results[0].get("name") or results[0].get("url")) if results else None,
+                }
             print("  ".join(line))
+            summary["retrieval_cases"].append(case_result)
 
     n = len(CASES)
     print(f"\n{'engine':<10}{'hit@1':>8}{'hit@3':>8}   (n={n};  Y = hit@1, y = hit@3 only, . = miss)")
     for engine, s in scores.items():
         print(f"{engine:<10}{s['hit1']/n:>8.0%}{s['hit3']/n:>8.0%}")
+        summary["engines"][engine] = {
+            "hit1": s["hit1"],
+            "hit3": s["hit3"],
+            "hit1_rate": round(s["hit1"] / n, 4),
+            "hit3_rate": round(s["hit3"] / n, 4),
+        }
 
     # Gate + tier check: positives must pass the similarity floor and land on
     # full or hint (never none); negatives must land on none.
     async with httpx.AsyncClient() as client:
         pos_pass = neg_reject = 0
         tier_counts = {"full": 0, "hint": 0, "none": 0}
+        positive_cases = []
+        negative_cases = []
         for query, _ in CASES:
             r = await client.get(f"{SUPABASE_URL}/find-semantic", params={"q": query}, timeout=30)
             body = r.json() if r.status_code == 200 else {}
             tier = body.get("tier", "none")
             tier_counts[tier] = tier_counts.get(tier, 0) + 1
-            if tier != "none":
+            ok = tier != "none"
+            if ok:
                 pos_pass += 1
             else:
                 print(f"  tier MISS (no match at all): {query[:60]!r}")
+            positive_cases.append({"query": query, "status_code": r.status_code, "tier": tier, "ok": ok})
         for query in NEGATIVE_CASES:
             # /find-semantic has no concept of the hook's own meta-prompt
             # filter (_should_route), which is what actually keeps a prompt
@@ -199,7 +248,9 @@ async def main() -> int:
             # mode is "full" -- silent auto-injection of junk.
             r = await client.get(f"{SUPABASE_URL}/find-semantic", params={"q": query}, timeout=30)
             body = r.json() if r.status_code == 200 else {}
-            if body.get("tier", "none") != "full":
+            tier = body.get("tier", "none")
+            ok = tier != "full"
+            if ok:
                 neg_reject += 1
             else:
                 # Known, accepted gap: "can you explain what you just did"
@@ -213,19 +264,41 @@ async def main() -> int:
                 # endpoint; only a bare recommend_skill call with this exact
                 # string as its task would still slip through.
                 print(f"  gate MISS (junk auto-injected at full tier, see comment above): {query[:60]!r}")
+            negative_cases.append({"query": query, "status_code": r.status_code, "tier": tier, "ok": ok})
     print(f"\ngate: positives passed {pos_pass}/{n}, negatives rejected {neg_reject}/{len(NEGATIVE_CASES)}")
     print(f"tier distribution over positives: {tier_counts}")
+    summary["tier_gate"] = {
+        "positive_pass": pos_pass,
+        "positive_total": n,
+        "negative_reject": neg_reject,
+        "negative_total": len(NEGATIVE_CASES),
+        "tier_counts": tier_counts,
+        "positive_cases": positive_cases,
+        "negative_cases": negative_cases,
+    }
 
     # Content-quality gates: synthetic regression cases for the connector-side
     # checks (auto_skill_core.py / hooks/skill_suggest.py), since a query-based
     # eval can't reliably reproduce a specific stranger's skill content forever.
     gate_ok = 0
+    content_gate_results = []
     for label, content, expect_bad in CONTENT_GATE_CASES:
         is_bad = _is_stub_content(content) or _is_unconfirmed_action_content(content)
         ok = is_bad == expect_bad
         gate_ok += ok
         print(f"  content-gate {'OK ' if ok else 'FAIL'}  {label}  (bad={is_bad}, expected={expect_bad})")
+        content_gate_results.append({
+            "label": label,
+            "bad": is_bad,
+            "expected_bad": expect_bad,
+            "ok": ok,
+        })
     print(f"content-quality gates: {gate_ok}/{len(CONTENT_GATE_CASES)} passed")
+    summary["content_quality"] = {
+        "passed": gate_ok,
+        "total": len(CONTENT_GATE_CASES),
+        "cases": content_gate_results,
+    }
     hard_failures = 0
     if gate_ok != len(CONTENT_GATE_CASES):
         hard_failures += len(CONTENT_GATE_CASES) - gate_ok
@@ -234,6 +307,7 @@ async def main() -> int:
     # one report so routing changes cannot improve relevance while silently
     # becoming too slow or too expensive to inject.
     route_ok = 0
+    route_case_results = []
     async with httpx.AsyncClient() as client:
         for label, query, allowed_tiers, min_hint_candidates in ROUTE_CASES:
             r = await client.post(
@@ -260,6 +334,17 @@ async def main() -> int:
                 and response_tokens <= ROUTE_RESPONSE_TOKEN_BUDGET
             )
             route_ok += ok
+            route_case_results.append({
+                "label": label,
+                "query": query,
+                "status_code": r.status_code,
+                "tier": tier,
+                "skill": skill.get("name") or skill.get("slug"),
+                "latency_ms": latency_ms,
+                "response_tokens": response_tokens,
+                "candidate_count": candidate_count,
+                "ok": ok,
+            })
             print(
                 "  route-bench "
                 f"{'OK ' if ok else 'FAIL'} {label}: tier={tier}, "
@@ -273,6 +358,17 @@ async def main() -> int:
     )
     if route_ok != len(ROUTE_CASES):
         hard_failures += len(ROUTE_CASES) - route_ok
+    summary["route_benchmark"] = {
+        "passed": route_ok,
+        "total": len(ROUTE_CASES),
+        "cases": route_case_results,
+    }
+    summary["hard_failures"] = hard_failures
+
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"wrote eval summary: {args.json_out}")
 
     if hard_failures:
         print(f"eval_search: {hard_failures} hard failure(s)")

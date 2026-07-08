@@ -53,6 +53,12 @@ python reindex.py
 python launch_check.py --base-url http://127.0.0.1:8000
 ```
 
+To track retrieval quality, route latency, and token churn across changes:
+
+```powershell
+python eval_search.py --json-out eval-results/latest.json
+```
+
 ## Routing Policy
 
 Runtime routing is deterministic. It uses local embeddings for retrieval, then
