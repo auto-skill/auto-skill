@@ -43,8 +43,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # headers while genuinely local callers (scraper itself, recommender, hook,
 # mcp_server) do not. Public callers get search/read endpoints only -- the
 # local REST surface has no auth, so every /rest/v1 path must stay loopback-only.
-PUBLIC_GET_PATHS = frozenset({"/", "/healthz", "/readyz", "/status", "/find-semantic", "/skills", "/library"})
-PUBLIC_GET_PREFIXES = ("/library/files/", "/content/")
+PUBLIC_GET_PATHS = frozenset({"/", "/healthz", "/readyz", "/status", "/find-semantic"})
+PUBLIC_GET_PREFIXES = ("/content/",)
 PUBLIC_POST_PATHS = frozenset({"/route"})
 
 

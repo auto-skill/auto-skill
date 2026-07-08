@@ -188,6 +188,9 @@ class ApiContractTests(unittest.TestCase):
             ("post", "/normalize-db", None),
             ("get", "/normalize-db/progress", None),
             ("post", "/rescan", None),
+            ("get", "/skills", None),
+            ("get", "/library", None),
+            ("get", "/library/files/example.md", None),
             ("get", "/route-metrics", None),
             ("post", "/route-feedback", {"route_id": "route-1", "outcome": "used"}),
             ("get", "/rest/v1/skills?select=id", None),
@@ -214,8 +217,6 @@ class ApiContractTests(unittest.TestCase):
             ("GET", "/readyz"),
             ("GET", "/status"),
             ("GET", "/find-semantic"),
-            ("GET", "/skills"),
-            ("GET", "/library"),
             ("GET", "/content/{hash_value}"),
             ("POST", "/route"),
         }
@@ -240,7 +241,9 @@ class ApiContractTests(unittest.TestCase):
                 self.assertEqual(blocked.json()["error"], "read-only public API", (method, path_format))
 
         self.assertEqual(discovered_public_routes, expected_public_routes)
-        self.assertTrue(scraper.public_api_allows("GET", "/library/files/example.md"))
+        self.assertFalse(scraper.public_api_allows("GET", "/skills"))
+        self.assertFalse(scraper.public_api_allows("GET", "/library"))
+        self.assertFalse(scraper.public_api_allows("GET", "/library/files/example.md"))
         self.assertFalse(scraper.public_api_allows("GET", "/library/files"))
 
     def test_scrape_run_lease_allows_only_one_running_row(self) -> None:
