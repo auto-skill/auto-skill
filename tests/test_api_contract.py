@@ -181,7 +181,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertGreater(event["response_tokens"], 0)
 
     def test_route_caps_platform_trap_to_hint(self) -> None:
-        candidate = {
+        landingi = {
             "id": "skill-1",
             "name": "sales-landingi",
             "description": "Landingi platform help for landing pages, custom domains, leads, and CRM sync.",
@@ -194,10 +194,23 @@ class ApiContractTests(unittest.TestCase):
             "rank": 1.0,
             "similarity": 0.95,
         }
+        landing_page = {
+            "id": "skill-2",
+            "name": "landing-page-architect",
+            "description": "Create landing pages with positioning, proof, sections, and CTA copy.",
+            "source": "github_skill_file",
+            "url": "https://example.com/landing-page",
+            "risk_score": 0,
+            "quality_status": "active",
+            "quality_score": 88,
+            "platforms": [],
+            "rank": 0.9,
+            "similarity": 0.9,
+        }
 
         async def fake_retrieve(client, query, limit):
             del client, query, limit
-            return [candidate]
+            return [landingi, landing_page]
 
         with patch("recommender.retrieve_skills", fake_retrieve):
             response = self.client.post("/route", json={"task": "build a landing page for an AI automation agency"})
@@ -207,8 +220,13 @@ class ApiContractTests(unittest.TestCase):
         self.assertTrue(body["route_id"])
         self.assertEqual(body["tier"], "hint")
         self.assertIsNone(body["content"])
-        self.assertTrue(body["score_debug"]["platform_mismatch"])
         self.assertEqual(body["score_debug"]["metrics"]["content_tokens"], 0)
+        self.assertEqual(
+            {c["name"] for c in body["candidates"]},
+            {"sales-landingi", "landing-page-architect"},
+        )
+        self.assertNotIn("content", body["candidates"][0])
+        self.assertLessEqual(len(body["candidates"]), 3)
 
     def test_route_metrics_summarizes_recent_events(self) -> None:
         candidate = {

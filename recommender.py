@@ -508,6 +508,24 @@ def _public_skill(row: dict | None) -> dict | None:
     }
 
 
+def _hint_candidates(results: list[dict], limit: int = 3) -> list[dict]:
+    """Return a small content-free option set for medium-confidence routes."""
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for row in results:
+        public = _public_skill(row)
+        if not public:
+            continue
+        key = (public.get("source_url") or public.get("url") or public.get("name") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidates.append(public)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
 def _score_debug(results: list[dict], tier: str) -> dict:
     if not results:
         return {"tier": tier, "reason": "no-results"}
@@ -635,9 +653,11 @@ async def route(body: RouteRequest):
                 content_url = f"/content/{chash}"
 
     debug = _score_debug(results, tier)
+    candidates = _hint_candidates(results) if tier == "hint" else []
     response_preview = {
         "tier": tier,
         "skill": skill,
+        "candidates": candidates,
         "content": content,
         "content_url": content_url,
         "config_version": CONFIG_VERSION,
@@ -687,6 +707,7 @@ async def route(body: RouteRequest):
     return {
         "tier": tier,
         "skill": skill,
+        "candidates": candidates,
         "content": content,
         "content_url": content_url,
         "route_id": route_id,

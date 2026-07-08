@@ -68,6 +68,10 @@ estimates:
   token churn.
 - Defaults warn above 1500 ms or 3500 response tokens.
 
+When `/route` returns `tier: "hint"`, it also includes up to three
+content-free `candidates` so clients can show a small option set without
+injecting full SKILL.md instructions.
+
 Each `/route` call also appends a privacy-safe `route_events` row keyed by a
 query hash, not raw prompt text. Use `GET /route-metrics` locally to inspect
 recent tier distribution, slow routes, top routed/used skills, and average
