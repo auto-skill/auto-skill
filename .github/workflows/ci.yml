@@ -83,6 +83,21 @@ jobs:
               throw "backup artifact missing: $required"
             }
           }
+          $restoreRoot = Join-Path $root "restore"
+          $restoreData = Join-Path $restoreRoot "data"
+          $restoreLibrary = Join-Path $restoreRoot "skills_library"
+          ./deploy/restore-local.ps1 `
+            -DbPath (Join-Path $latest.FullName "local_skills.db") `
+            -LibraryArchive (Join-Path $latest.FullName "skills_library.tgz") `
+            -TargetDataDir $restoreData `
+            -TargetLibraryDir $restoreLibrary
+
+          $restoredDb = Join-Path $restoreData "local_skills.db"
+          $restoredName = python -c "import sqlite3, sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select name from skills').fetchone()[0]); c.close()" $restoredDb
+          if ($restoredName -ne "demo") { throw "restored DB row mismatch: $restoredName" }
+          if (-not (Test-Path -LiteralPath (Join-Path $restoreLibrary "files/demo.md"))) {
+            throw "restored library markdown missing"
+          }
 
       - name: Validate docker compose
         run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.yml config

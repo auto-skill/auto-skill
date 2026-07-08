@@ -3,27 +3,37 @@ param(
     [string]$DbPath,
 
     [Parameter(Mandatory = $false)]
-    [string]$LibraryArchive = ""
+    [string]$LibraryArchive = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetDataDir = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetLibraryDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
-$dataDir = Join-Path $root "data"
-$libraryDir = Join-Path $root "skills_library"
-
-New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
-Copy-Item -LiteralPath $DbPath -Destination (Join-Path $dataDir "local_skills.db") -Force
-
-if ($LibraryArchive) {
-    if (Test-Path -LiteralPath $libraryDir) {
-        $stamp = Get-Date -Format "yyyyMMddTHHmmssZ"
-        Rename-Item -LiteralPath $libraryDir -NewName "skills_library.before_restore.$stamp"
-    }
-    New-Item -ItemType Directory -Force -Path $libraryDir | Out-Null
-    tar -xzf $LibraryArchive -C $libraryDir
+if (-not $TargetDataDir) {
+    $TargetDataDir = Join-Path $root "data"
+}
+if (-not $TargetLibraryDir) {
+    $TargetLibraryDir = Join-Path $root "skills_library"
 }
 
-Write-Host "Restored DB to $dataDir\local_skills.db"
+New-Item -ItemType Directory -Force -Path $TargetDataDir | Out-Null
+Copy-Item -LiteralPath $DbPath -Destination (Join-Path $TargetDataDir "local_skills.db") -Force
+
 if ($LibraryArchive) {
-    Write-Host "Restored library to $libraryDir"
+    if (Test-Path -LiteralPath $TargetLibraryDir) {
+        $stamp = Get-Date -Format "yyyyMMddTHHmmssZ"
+        Rename-Item -LiteralPath $TargetLibraryDir -NewName "skills_library.before_restore.$stamp"
+    }
+    New-Item -ItemType Directory -Force -Path $TargetLibraryDir | Out-Null
+    tar -xzf $LibraryArchive -C $TargetLibraryDir
+}
+
+Write-Host "Restored DB to $TargetDataDir\local_skills.db"
+if ($LibraryArchive) {
+    Write-Host "Restored library to $TargetLibraryDir"
 }

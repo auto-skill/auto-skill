@@ -251,6 +251,12 @@ On Windows, after downloading restored artifacts:
 .\deploy\restore-local.ps1 -DbPath .\restored\local_skills.db -LibraryArchive .\restored\skills_library.tgz
 ```
 
+For a scratch restore drill that does not replace the live repo paths:
+
+```powershell
+.\deploy\restore-local.ps1 -DbPath .\restored\local_skills.db -LibraryArchive .\restored\skills_library.tgz -TargetDataDir .\restore-drill\data -TargetLibraryDir .\restore-drill\skills_library
+```
+
 ## Health And Readiness
 
 - `/healthz` is for uptime checks: process responding.
