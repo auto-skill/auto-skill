@@ -43,8 +43,19 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # headers while genuinely local callers (scraper itself, recommender, hook,
 # mcp_server) do not. Public callers get search/read endpoints only -- the
 # local REST surface has no auth, so every /rest/v1 path must stay loopback-only.
-PUBLIC_GET_PATHS = {"/", "/healthz", "/readyz", "/status", "/find-semantic", "/skills", "/library"}
-PUBLIC_POST_RE = re.compile(r"^/route$")
+PUBLIC_GET_PATHS = frozenset({"/", "/healthz", "/readyz", "/status", "/find-semantic", "/skills", "/library"})
+PUBLIC_GET_PREFIXES = ("/library/files/", "/content/")
+PUBLIC_POST_PATHS = frozenset({"/route"})
+
+
+def public_api_allows(method: str, path: str) -> bool:
+    path = path.rstrip("/") or "/"
+    method = method.upper()
+    if method == "GET":
+        return path in PUBLIC_GET_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_GET_PREFIXES)
+    if method == "POST":
+        return path in PUBLIC_POST_PATHS
+    return False
 
 
 @app.middleware("http")
@@ -52,17 +63,7 @@ async def public_readonly_guard(request, call_next):
     from fastapi.responses import JSONResponse
     is_public = bool(request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for"))
     if is_public:
-        path = request.url.path.rstrip("/") or "/"
-        allowed = (
-            request.method == "GET" and (
-                path in PUBLIC_GET_PATHS
-                or path.startswith("/library/files/")
-                or path.startswith("/content/")
-            )
-        ) or (
-            request.method == "POST" and PUBLIC_POST_RE.match(path)
-        )
-        if not allowed:
+        if not public_api_allows(request.method, request.url.path):
             return JSONResponse({"error": "read-only public API"}, status_code=403)
     return await call_next(request)
 

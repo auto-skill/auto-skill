@@ -27,6 +27,40 @@ Always validate sheet names, formulas, and chart ranges before returning output.
 """
 
 
+def _registered_routes(app):
+    for route in app.routes:
+        router = getattr(route, "original_router", None)
+        if router:
+            yield from router.routes
+        else:
+            yield route
+
+
+def _route_example(path_format: str) -> str:
+    examples = {
+        "/content/{hash_value}": "/content/" + "0" * 64,
+        "/rest/v1/{table}": "/rest/v1/skills",
+        "/library/files/{path}": "/library/files/example.md",
+    }
+    return examples.get(path_format, path_format)
+
+
+def _route_json_body(method: str, path_format: str) -> dict | None:
+    if method not in {"POST", "PATCH", "PUT"}:
+        return None
+    if path_format == "/chat":
+        return {"messages": [{"role": "user", "content": "find a spreadsheet skill"}]}
+    if path_format == "/route":
+        return {"task": "create an excel spreadsheet report"}
+    if path_format == "/route-feedback":
+        return {"route_id": "route-1", "outcome": "used"}
+    if path_format.startswith("/rest/v1/rpc/"):
+        return {"query": "spreadsheet", "max_results": 3}
+    if path_format == "/rest/v1/{table}":
+        return {"id": "public-guard", "name": "blocked", "source": "test"}
+    return {}
+
+
 class ApiContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -172,6 +206,42 @@ class ApiContractTests(unittest.TestCase):
             blocked = request(path, **kwargs)
             self.assertEqual(blocked.status_code, 403, path)
             self.assertEqual(blocked.json()["error"], "read-only public API", path)
+
+    def test_public_guard_contract_covers_registered_routes(self) -> None:
+        expected_public_routes = {
+            ("GET", "/"),
+            ("GET", "/healthz"),
+            ("GET", "/readyz"),
+            ("GET", "/status"),
+            ("GET", "/find-semantic"),
+            ("GET", "/skills"),
+            ("GET", "/library"),
+            ("GET", "/content/{hash_value}"),
+            ("POST", "/route"),
+        }
+        discovered_public_routes = set()
+
+        for route in _registered_routes(scraper.app):
+            path_format = getattr(route, "path_format", None) or getattr(route, "path", "")
+            methods = set(getattr(route, "methods", set()) or set()) - {"HEAD", "OPTIONS"}
+            for method in methods:
+                public_path = _route_example(path_format)
+                if scraper.public_api_allows(method, public_path):
+                    discovered_public_routes.add((method, path_format))
+                    continue
+
+                request = getattr(self.client, method.lower())
+                kwargs = {"headers": {"x-forwarded-for": "203.0.113.10"}}
+                json_body = _route_json_body(method, path_format)
+                if json_body is not None:
+                    kwargs["json"] = json_body
+                blocked = request(public_path, **kwargs)
+                self.assertEqual(blocked.status_code, 403, (method, path_format, public_path))
+                self.assertEqual(blocked.json()["error"], "read-only public API", (method, path_format))
+
+        self.assertEqual(discovered_public_routes, expected_public_routes)
+        self.assertTrue(scraper.public_api_allows("GET", "/library/files/example.md"))
+        self.assertFalse(scraper.public_api_allows("GET", "/library/files"))
 
     def test_scrape_run_lease_allows_only_one_running_row(self) -> None:
         first = self.client.post("/rest/v1/scrape_runs", json={"id": "run-1", "status": "running"})
