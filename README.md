@@ -24,6 +24,10 @@ Useful endpoints:
 - `GET /route-metrics` - local-only route latency/token analytics summary.
 - `POST /route-feedback` - local-only privacy-safe route outcome feedback.
 
+`/readyz` and `/route-metrics` include `vector_index` stats so search latency
+can be correlated with active corpus size, valid embeddings, and embedding
+matrix cache state before moving to a new vector backend.
+
 ## Quality Gate
 
 Fresh ingest writes deterministic quality metadata:

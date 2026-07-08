@@ -104,7 +104,13 @@ async def readyz():
                 "SELECT COUNT(*) FROM skills WHERE COALESCE(quality_status, 'active') = 'active'"
             ).fetchone()[0]
             embedded = conn.execute("SELECT COUNT(*) FROM skills WHERE embedding IS NOT NULL").fetchone()[0]
-            return {"total_skills": total, "active_skills": active, "embedded_skills": embedded}
+            vector_index = store.vector_index_stats()
+            return {
+                "total_skills": total,
+                "active_skills": active,
+                "embedded_skills": embedded,
+                "vector_index": vector_index,
+            }
         finally:
             conn.close()
 

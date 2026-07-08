@@ -103,6 +103,8 @@ class ApiContractTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["active_skills"], 1)
         self.assertEqual(body["embedded_skills"], 1)
+        self.assertEqual(body["vector_index"]["valid_vectors"], 1)
+        self.assertEqual(body["vector_index"]["vector_dim"], 384)
 
     def test_public_guard_allows_readiness_and_route_but_blocks_writes(self) -> None:
         self.assertEqual(self.client.get("/readyz", headers={"x-forwarded-for": "203.0.113.10"}).status_code, 503)
@@ -243,6 +245,8 @@ class ApiContractTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["total"], 1)
         self.assertGreaterEqual(metrics["tiers"]["hint"], 1)
         self.assertGreaterEqual(metrics["outcomes"]["pending"], 1)
+        self.assertIn("vector_index", metrics)
+        self.assertEqual(metrics["vector_index"]["vector_dim"], 384)
         self.assertGreaterEqual(metrics["avg_response_tokens"], 1)
 
     def test_route_feedback_updates_existing_route_event(self) -> None:

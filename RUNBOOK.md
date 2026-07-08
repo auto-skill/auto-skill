@@ -83,6 +83,10 @@ Inspect route analytics locally on the host:
 Invoke-RestMethod http://127.0.0.1:8000/route-metrics | ConvertTo-Json -Depth 5
 ```
 
+Check `vector_index.valid_vectors`, `cache_ready`, `cache_vectors`, and
+`matrix_bytes` there before deciding the brute-force NumPy index is the actual
+bottleneck.
+
 Route outcome feedback is also local-only:
 
 ```powershell

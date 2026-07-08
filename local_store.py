@@ -417,6 +417,7 @@ def route_event_summary(hours: int = 24) -> dict:
             "total": total,
             "tiers": tiers,
             "outcomes": outcomes,
+            "vector_index": vector_index_stats(),
             "avg_latency_ms": int(row["avg_latency_ms"] or 0),
             "avg_retrieval_ms": int(row["avg_retrieval_ms"] or 0),
             "avg_content_ms": int(row["avg_content_ms"] or 0),
@@ -508,6 +509,41 @@ _EMB_DIM = 384
 _EMB_BLOB_LEN = _EMB_DIM * 4
 _EMB_CACHE_TTL_SECONDS = 60.0
 _emb_cache: dict = {"at": 0.0, "ids": [], "mat": None}
+
+
+def vector_index_stats() -> dict:
+    """Return cheap search-index stats for latency/debug dashboards."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN COALESCE(quality_status, 'active') = 'active' THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS embedded,
+              SUM(CASE WHEN embedding IS NOT NULL AND LENGTH(embedding) = ? THEN 1 ELSE 0 END) AS valid_vectors
+            FROM skills
+            """,
+            (_EMB_BLOB_LEN,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    mat = _emb_cache.get("mat")
+    cache_at = float(_emb_cache.get("at") or 0.0)
+    age_ms = int((time.monotonic() - cache_at) * 1000) if mat is not None and cache_at else None
+    return {
+        "total_skills": int(row["total"] or 0),
+        "active_skills": int(row["active"] or 0),
+        "embedded_skills": int(row["embedded"] or 0),
+        "valid_vectors": int(row["valid_vectors"] or 0),
+        "cache_ready": mat is not None,
+        "cache_vectors": len(_emb_cache.get("ids") or []),
+        "cache_age_ms": age_ms,
+        "cache_ttl_seconds": int(_EMB_CACHE_TTL_SECONDS),
+        "matrix_bytes": int(mat.nbytes) if mat is not None else 0,
+        "vector_dim": _EMB_DIM,
+    }
 
 
 def _embedding_matrix(conn: sqlite3.Connection) -> tuple[list[str], np.ndarray]:
