@@ -69,4 +69,5 @@ for local experiments; production `/route` does not depend on an LLM.
 The current app still stores SKILL.md files under `skills_library/`, so that
 directory needs its own backup until content is moved into SQLite.
 
-See `RUNBOOK.md` for operations notes.
+See `RUNBOOK.md` for operations notes and the current Windows host update
+path.

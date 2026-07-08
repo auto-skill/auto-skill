@@ -5,8 +5,10 @@
 1. Back up the current `local_skills.db` and `skills_library/`.
 2. Run `python backfill_quality.py`.
 3. Run `python -m unittest discover`.
-4. Run `python reindex.py` to refresh active embeddings.
-5. Start the API and verify:
+4. Start the API.
+5. Run `python reindex.py` to refresh active embeddings. This writes through
+   the localhost API at `127.0.0.1:8000`, so the API must be running.
+6. Verify:
    - `GET /healthz` returns `{"ok": true}`.
    - `GET /readyz` returns `ok=true` with nonzero total, active, and embedded
      row counts.
@@ -28,6 +30,59 @@ For a local dry run before the API is running:
 ```powershell
 python launch_check.py --skip-http --skip-docker --skip-env
 ```
+
+## Current Windows Host Update
+
+The live alpha host currently runs three PowerShell restart loops behind a
+Cloudflare Tunnel:
+
+- `start_scraper.ps1`: starts `python scraper.py`, which serves the FastAPI API
+  on `localhost:8000` and can also run the scraper loop.
+- `start_connector_http.ps1`: starts the connector MCP HTTP service on
+  `localhost:8765`.
+- `start_cloudflared.ps1`: exposes `skills.avalahome.com` and
+  `mcp.avalahome.com` to those local ports.
+
+The first fix for public `403 {"error":"read-only public API"}` responses on
+`/readyz` or `/route` is to pull and restart the API host. Old code allowed
+public `/healthz` but blocked those newer route/readiness endpoints.
+
+On the host:
+
+```powershell
+git pull --ff-only origin main
+.\deploy\update-host.ps1 -SkipPull -SkipLaunchCheck
+```
+
+Then restart the API/scraper supervisor so `python scraper.py` reloads the new
+code. If legacy rows have not been quality-gated yet, run the backfill while the
+API is stopped or quiet:
+
+```powershell
+python backfill_quality.py
+```
+
+After the API is running on `localhost:8000`, refresh active embeddings if
+needed:
+
+```powershell
+python reindex.py
+```
+
+Finally prove the public service is serving the new code:
+
+```powershell
+python launch_check.py --base-url https://skills.avalahome.com --skip-env --skip-docker
+```
+
+`deploy\update-host.ps1` can also run the optional maintenance steps:
+
+```powershell
+.\deploy\update-host.ps1 -RunBackfill -RunReindex -ApplyScrapeCleanup
+```
+
+After the first update, the script can do the pull itself; keep `-SkipPull`
+only when you already pulled in the same session.
 
 ## Docker Compose Skeleton
 
