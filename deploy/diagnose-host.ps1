@@ -67,6 +67,40 @@ function Test-PathPresent {
     }
 }
 
+function Format-TaskResult {
+    param($Result)
+    if ($null -eq $Result) {
+        return "unknown"
+    }
+    return "$Result (0x$([Convert]::ToString([int64]$Result, 16)))"
+}
+
+function Test-ScheduledTaskState {
+    param(
+        [string]$TaskName,
+        [switch]$RequireRunning
+    )
+
+    try {
+        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+        $detailParts = @("state=$($task.State)")
+        if ($info) {
+            $detailParts += "last_run=$($info.LastRunTime)"
+            $detailParts += "next_run=$($info.NextRunTime)"
+            $detailParts += "last_result=$(Format-TaskResult $info.LastTaskResult)"
+        }
+        $detail = $detailParts -join ", "
+        if ($RequireRunning -and $task.State -ne "Running") {
+            Fail "scheduled task $TaskName" "$detail; expected long-running service task to be Running"
+        } else {
+            Pass "scheduled task $TaskName" $detail
+        }
+    } catch {
+        Warn "scheduled task $TaskName" "not installed; run deploy\install-windows-tasks.ps1 on the host"
+    }
+}
+
 function Format-Bytes {
     param([double]$Bytes)
     if ($Bytes -ge 1GB) {
@@ -125,14 +159,10 @@ if ($cloudflaredProcesses) {
     Fail "cloudflared process" "not running; public Cloudflare Tunnel will return 1033/HTTP 530"
 }
 
-foreach ($taskName in @("$TaskPrefix-API", "$TaskPrefix-MCP", "$TaskPrefix-Tunnel", "$TaskPrefix-Backup")) {
-    try {
-        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-        Pass "scheduled task $taskName" "state=$($task.State)"
-    } catch {
-        Warn "scheduled task $taskName" "not installed; run deploy\install-windows-tasks.ps1 on the host"
-    }
-}
+Test-ScheduledTaskState "$TaskPrefix-API" -RequireRunning
+Test-ScheduledTaskState "$TaskPrefix-MCP" -RequireRunning
+Test-ScheduledTaskState "$TaskPrefix-Tunnel" -RequireRunning
+Test-ScheduledTaskState "$TaskPrefix-Backup"
 
 $backupRoot = Join-Path $RepoRoot "data\backups"
 if (-not (Test-Path -LiteralPath $backupRoot)) {

@@ -110,6 +110,10 @@ origin is unreachable. Run the read-only host diagnostic on the Windows host:
 .\deploy\diagnose-host.ps1
 ```
 
+For `AutoSkill-API`, `AutoSkill-MCP`, and `AutoSkill-Tunnel`, the diagnostic
+reports Task Scheduler state, last run time, next run time, and last result. A
+service task that is installed but not `Running` is a launch failure.
+
 If Windows blocks local scripts by execution policy:
 
 ```powershell
