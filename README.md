@@ -65,6 +65,12 @@ python reindex.py
 python launch_check.py --base-url http://127.0.0.1:8000
 ```
 
+For a quick public status read before the heavier launch gate:
+
+```powershell
+python launch_status.py
+```
+
 To track retrieval quality, route latency, and token churn across changes:
 
 ```powershell

@@ -102,6 +102,7 @@ python reindex.py
 Finally prove the public service is serving the new code:
 
 ```powershell
+python launch_status.py
 python launch_check.py --base-url https://skills.avalahome.com --mcp-health-url https://mcp.avalahome.com/healthz --skip-env --skip-docker
 ```
 
