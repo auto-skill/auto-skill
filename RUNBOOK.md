@@ -177,6 +177,22 @@ The compose file uses bind mounts instead of opaque Docker volumes:
 Seed a VPS by copying the current DB and library into those paths before the
 first `docker compose up`.
 
+## Hosted Storage Decision
+
+For alpha, keep runtime state boring:
+
+- `local_skills.db` remains the source of truth on one backend host.
+- Litestream replicates SQLite WAL/backups to Cloudflare R2.
+- `skills_library/` stays as recoverable SKILL.md files, backed up as tarballs
+  and optionally exported as deduped compressed content blobs.
+- Only one supervised scraper/worker should write at a time.
+
+Do not move the live route path to Turso/libSQL, Postgres, or a hosted vector
+database just to look production-grade. Revisit that when one of these becomes
+true: the host is unreliable after scheduled tasks/tunnel fixes, SQLite write
+contention shows up in metrics, multiple regions need live reads, or
+`skill_find_ms`/vector cache size proves local search is the bottleneck.
+
 ## Backups
 
 Litestream covers `/data/local_skills.db` in the compose setup. The
