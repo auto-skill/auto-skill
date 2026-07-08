@@ -333,6 +333,45 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("avg_injected_tokens", metrics)
         self.assertGreaterEqual(metrics["top_skills"][0]["avg_skill_find_ms"], 0)
         self.assertGreaterEqual(metrics["avg_response_tokens"], 1)
+        self.assertIn("p95_skill_find_ms", metrics)
+        self.assertIn("p95_injected_tokens", metrics)
+        self.assertEqual(metrics["budgets"]["skill_find_ms"], 1200)
+        self.assertEqual(metrics["budgets"]["injected_tokens"], 3000)
+        self.assertEqual(metrics["budget_breaches"]["any"], 0)
+
+        local_store.insert_route_event(
+            {
+                "client": "test-client",
+                "client_version": "0.1",
+                "query_hash": "synthetic-slow-route",
+                "query_chars": 20,
+                "tier": "hint",
+                "skill_id": "skill-1",
+                "skill_name": "spreadsheet-reporter",
+                "skill_url": "https://example.com/spreadsheet",
+                "latency_ms": 2500,
+                "skill_find_ms": 1800,
+                "retrieval_ms": 1700,
+                "rerank_ms": 100,
+                "content_ms": 0,
+                "result_count": 3,
+                "input_tokens": 8,
+                "hint_tokens": 40,
+                "candidate_tokens": 4500,
+                "content_tokens": 0,
+                "injected_tokens": 4500,
+                "response_tokens": 5200,
+                "config_version": "test",
+                "warnings": ["synthetic breach"],
+            }
+        )
+        metrics = self.client.get("/route-metrics").json()
+        self.assertGreaterEqual(metrics["p95_latency_ms"], metrics["avg_latency_ms"])
+        self.assertEqual(metrics["budget_breaches"]["latency_ms"], 1)
+        self.assertEqual(metrics["budget_breaches"]["skill_find_ms"], 1)
+        self.assertEqual(metrics["budget_breaches"]["injected_tokens"], 1)
+        self.assertEqual(metrics["budget_breaches"]["response_tokens"], 1)
+        self.assertEqual(metrics["budget_breaches"]["any"], 1)
 
     def test_route_feedback_updates_existing_route_event(self) -> None:
         candidate = {

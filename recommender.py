@@ -54,6 +54,8 @@ RECOMMEND_GAP = 1.6
 ROUTE_TTL_SECONDS = int(os.getenv("ROUTE_TTL_SECONDS", "300"))
 MAX_INLINE_CONTENT_CHARS = int(os.getenv("MAX_INLINE_CONTENT_CHARS", "12000"))
 ROUTE_LATENCY_WARN_MS = int(os.getenv("ROUTE_LATENCY_WARN_MS", "1500"))
+ROUTE_SKILL_FIND_WARN_MS = int(os.getenv("ROUTE_SKILL_FIND_WARN_MS", "1200"))
+ROUTE_INJECTED_TOKEN_WARN = int(os.getenv("ROUTE_INJECTED_TOKEN_WARN", "3000"))
 ROUTE_RESPONSE_TOKEN_WARN = int(os.getenv("ROUTE_RESPONSE_TOKEN_WARN", "3500"))
 CONTENT_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 EMBED_INTERVAL_SECONDS = int(os.getenv("EMBED_INTERVAL_SECONDS", "300"))
@@ -695,6 +697,10 @@ async def route(body: RouteRequest):
     }
     if metrics["latency_ms"] > ROUTE_LATENCY_WARN_MS:
         warnings.append(f"Route latency exceeded {ROUTE_LATENCY_WARN_MS}ms budget.")
+    if metrics["skill_find_ms"] > ROUTE_SKILL_FIND_WARN_MS:
+        warnings.append(f"Skill find exceeded {ROUTE_SKILL_FIND_WARN_MS}ms budget.")
+    if metrics["injected_tokens"] > ROUTE_INJECTED_TOKEN_WARN:
+        warnings.append(f"Injected content exceeded {ROUTE_INJECTED_TOKEN_WARN} token budget.")
     if metrics["response_tokens"] > ROUTE_RESPONSE_TOKEN_WARN:
         warnings.append(f"Route response exceeded {ROUTE_RESPONSE_TOKEN_WARN} token budget.")
     debug["metrics"] = metrics
@@ -764,7 +770,14 @@ async def find_semantic(q: str, limit: int = 8, gate: bool = True):
 @router.get("/route-metrics")
 async def route_metrics(hours: int = 24):
     hours = max(1, min(int(hours or 24), 24 * 30))
-    summary = await asyncio.to_thread(store.route_event_summary, hours)
+    summary = await asyncio.to_thread(
+        store.route_event_summary,
+        hours,
+        max_latency_ms=ROUTE_LATENCY_WARN_MS,
+        max_skill_find_ms=ROUTE_SKILL_FIND_WARN_MS,
+        max_injected_tokens=ROUTE_INJECTED_TOKEN_WARN,
+        max_response_tokens=ROUTE_RESPONSE_TOKEN_WARN,
+    )
     return {"ok": True, **summary, "config_version": CONFIG_VERSION}
 
 

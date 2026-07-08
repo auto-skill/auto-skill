@@ -142,9 +142,11 @@ Check `vector_index.valid_vectors`, `cache_ready`, `cache_vectors`, and
 `matrix_bytes` there before deciding the brute-force NumPy index is the actual
 bottleneck.
 
-Use `avg_skill_find_ms`, `avg_injected_tokens`, `top_skills`, and
-`top_used_skills` to spot which routes are slow, expensive, valuable,
-over-triggered, or need better skill content.
+Use `p95_skill_find_ms`, `p95_injected_tokens`, `budget_breaches`,
+`top_skills`, and `top_used_skills` to spot which routes are slow, expensive,
+valuable, over-triggered, or need better skill content. Averages are useful
+trend lines, but the p95 and breach counts decide whether a launch build is
+quietly churning tokens or hanging on tail routes.
 
 Archive internal eval snapshots before and after routing changes:
 

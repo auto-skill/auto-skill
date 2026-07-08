@@ -389,7 +389,22 @@ def insert_route_event(event: dict) -> None:
         conn.close()
 
 
-def route_event_summary(hours: int = 24) -> dict:
+def _percentile(values: list[int], percentile: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * percentile))))
+    return int(ordered[index] or 0)
+
+
+def route_event_summary(
+    hours: int = 24,
+    *,
+    max_latency_ms: int = 1500,
+    max_skill_find_ms: int = 1200,
+    max_injected_tokens: int = 3000,
+    max_response_tokens: int = 3500,
+) -> dict:
     """Aggregate recent route events for local ops/product checks."""
     conn = get_conn()
     try:
@@ -431,6 +446,35 @@ def route_event_summary(hours: int = 24) -> dict:
             """,
             (cutoff_iso,),
         ).fetchone()
+        metric_rows = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT latency_ms, skill_find_ms, injected_tokens, response_tokens
+                FROM route_events
+                WHERE created_at >= ?
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+        ]
+        latency_values = [int(r["latency_ms"] or 0) for r in metric_rows]
+        skill_find_values = [int(r["skill_find_ms"] or 0) for r in metric_rows]
+        injected_values = [int(r["injected_tokens"] or 0) for r in metric_rows]
+        response_values = [int(r["response_tokens"] or 0) for r in metric_rows]
+        budget_breaches = {
+            "latency_ms": sum(1 for value in latency_values if value > max_latency_ms),
+            "skill_find_ms": sum(1 for value in skill_find_values if value > max_skill_find_ms),
+            "injected_tokens": sum(1 for value in injected_values if value > max_injected_tokens),
+            "response_tokens": sum(1 for value in response_values if value > max_response_tokens),
+            "any": sum(
+                1
+                for r in metric_rows
+                if int(r["latency_ms"] or 0) > max_latency_ms
+                or int(r["skill_find_ms"] or 0) > max_skill_find_ms
+                or int(r["injected_tokens"] or 0) > max_injected_tokens
+                or int(r["response_tokens"] or 0) > max_response_tokens
+            ),
+        }
         slowest = [
             dict(r)
             for r in conn.execute(
@@ -502,10 +546,21 @@ def route_event_summary(hours: int = 24) -> dict:
             "avg_content_ms": int(row["avg_content_ms"] or 0),
             "avg_injected_tokens": int(row["avg_injected_tokens"] or 0),
             "avg_response_tokens": int(row["avg_response_tokens"] or 0),
+            "p95_latency_ms": _percentile(latency_values, 0.95),
+            "p95_skill_find_ms": _percentile(skill_find_values, 0.95),
+            "p95_injected_tokens": _percentile(injected_values, 0.95),
+            "p95_response_tokens": _percentile(response_values, 0.95),
             "max_skill_find_ms": int(row["max_skill_find_ms"] or 0),
             "max_latency_ms": int(row["max_latency_ms"] or 0),
             "max_injected_tokens": int(row["max_injected_tokens"] or 0),
             "max_response_tokens": int(row["max_response_tokens"] or 0),
+            "budgets": {
+                "latency_ms": int(max_latency_ms),
+                "skill_find_ms": int(max_skill_find_ms),
+                "injected_tokens": int(max_injected_tokens),
+                "response_tokens": int(max_response_tokens),
+            },
+            "budget_breaches": budget_breaches,
             "slowest": slowest,
         }
     finally:
