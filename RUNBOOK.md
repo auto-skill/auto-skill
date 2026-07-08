@@ -214,7 +214,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tas
 ```
 
 `deploy\diagnose-host.ps1` warns when no backup manifest exists or the newest
-manifest under `data\backups\` is older than 30 hours.
+manifest under `data\backups\` is older than 30 hours. It also reports backup
+footprint and warns when the repo drive has less than 5 GB free; override with
+`-MinFreeDiskGb N`.
 
 To prepare deduped compressed content blobs for R2:
 

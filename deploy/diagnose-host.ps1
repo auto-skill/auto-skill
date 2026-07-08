@@ -4,7 +4,8 @@ param(
     [string]$LocalApiUrl = "http://127.0.0.1:8000",
     [string]$LocalMcpHealthUrl = "http://127.0.0.1:8765/healthz",
     [string]$TaskPrefix = "AutoSkill",
-    [int]$MaxBackupAgeHours = 30
+    [int]$MaxBackupAgeHours = 30,
+    [int]$MinFreeDiskGb = 5
 )
 
 $ErrorActionPreference = "Continue"
@@ -66,6 +67,17 @@ function Test-PathPresent {
     }
 }
 
+function Format-Bytes {
+    param([double]$Bytes)
+    if ($Bytes -ge 1GB) {
+        return "$([math]::Round($Bytes / 1GB, 2)) GB"
+    }
+    if ($Bytes -ge 1MB) {
+        return "$([math]::Round($Bytes / 1MB, 2)) MB"
+    }
+    return "$([math]::Round($Bytes, 0)) bytes"
+}
+
 Write-Host "Auto-Skill host diagnosis"
 Write-Host "Repo: $RepoRoot"
 try {
@@ -88,6 +100,14 @@ if ($dbPath) {
     Pass "local db" $dbPath
 } else {
     Fail "local db" "no local_skills.db found; checked $($dbCandidates -join ', ')"
+}
+
+$repoDrive = Get-PSDrive -Name ((Get-Item -LiteralPath $RepoRoot).PSDrive.Name)
+$freeGb = [math]::Round($repoDrive.Free / 1GB, 2)
+if ($freeGb -lt $MinFreeDiskGb) {
+    Warn "disk free" "drive=$($repoDrive.Name), free_gb=$freeGb, min_gb=$MinFreeDiskGb"
+} else {
+    Pass "disk free" "drive=$($repoDrive.Name), free_gb=$freeGb"
 }
 
 Test-PathPresent "skills library index" (Join-Path $RepoRoot "skills_library\index.json")
@@ -118,6 +138,10 @@ $backupRoot = Join-Path $RepoRoot "data\backups"
 if (-not (Test-Path -LiteralPath $backupRoot)) {
     Warn "backup freshness" "backup directory missing: $backupRoot"
 } else {
+    $backupFiles = @(Get-ChildItem -LiteralPath $backupRoot -Recurse -File)
+    $backupBytes = ($backupFiles | Measure-Object -Property Length -Sum).Sum
+    $backupDirs = @(Get-ChildItem -LiteralPath $backupRoot -Directory | Where-Object { $_.Name -match "^\d{8}T\d{6}Z$" })
+    Pass "backup footprint" "sets=$($backupDirs.Count), files=$($backupFiles.Count), bytes=$(Format-Bytes $backupBytes)"
     $latestManifest = Get-ChildItem -LiteralPath $backupRoot -Recurse -Filter manifest.json -File |
         Sort-Object LastWriteTimeUtc -Descending |
         Select-Object -First 1
