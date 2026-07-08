@@ -71,6 +71,19 @@ API is stopped or quiet:
 python backfill_quality.py
 ```
 
+Install or refresh the user-level scheduled tasks so the three restart loops
+come back after host reboots:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tasks.ps1 -StartNow
+```
+
+To inspect before changing Task Scheduler, add `-DryRun`. To remove the tasks:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tasks.ps1 -Unregister
+```
+
 After the API is running on `localhost:8000`, refresh active embeddings if
 needed:
 

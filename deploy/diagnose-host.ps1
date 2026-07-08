@@ -2,7 +2,8 @@ param(
     [string]$BaseUrl = "https://skills.avalahome.com",
     [string]$McpHealthUrl = "https://mcp.avalahome.com/healthz",
     [string]$LocalApiUrl = "http://127.0.0.1:8000",
-    [string]$LocalMcpHealthUrl = "http://127.0.0.1:8765/healthz"
+    [string]$LocalMcpHealthUrl = "http://127.0.0.1:8765/healthz",
+    [string]$TaskPrefix = "AutoSkill"
 )
 
 $ErrorActionPreference = "Continue"
@@ -101,6 +102,15 @@ if ($cloudflaredProcesses) {
     Pass "cloudflared process" "running pid(s): $ids"
 } else {
     Fail "cloudflared process" "not running; public Cloudflare Tunnel will return 1033/HTTP 530"
+}
+
+foreach ($taskName in @("$TaskPrefix-API", "$TaskPrefix-MCP", "$TaskPrefix-Tunnel")) {
+    try {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        Pass "scheduled task $taskName" "state=$($task.State)"
+    } catch {
+        Warn "scheduled task $taskName" "not installed; run deploy\install-windows-tasks.ps1 on the host"
+    }
 }
 
 Test-JsonEndpoint "local API healthz" "$($LocalApiUrl.TrimEnd('/'))/healthz" -RequireOk -RequireService
