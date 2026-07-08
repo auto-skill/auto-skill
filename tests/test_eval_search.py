@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from eval_search import DEFAULT_ROUTE_CASES_PATH, _evaluate_route_case, _load_route_cases
+from eval_search import DEFAULT_ROUTE_CASES_PATH, _evaluate_route_case, _load_route_cases, _validate_route_cases
 
 
 class EvalSearchRouteCaseTests(unittest.TestCase):
@@ -15,6 +15,24 @@ class EvalSearchRouteCaseTests(unittest.TestCase):
 
         self.assertIn("trap-landingi-001", case_ids)
         self.assertGreaterEqual(len(platform_traps), 5)
+
+    def test_validate_route_cases_rejects_duplicate_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "routes.jsonl"
+            path.write_text(
+                '{"id":"dup","prompt":"send slack messages","expected_tier":"full|hint",'
+                '"allowed_skills":["slack"],"tags":["direct-hit"]}\n'
+                '{"id":"dup","prompt":"thanks","expected_tier":"none",'
+                '"forbidden_skills":["*"],"tags":["negative"]}\n'
+                '{"id":"trap","prompt":"build a landing page","expected_tier":"hint|none",'
+                '"forbidden_skills":["landingi"],"tags":["platform-trap"]}\n',
+                encoding="utf-8",
+            )
+
+            result = _validate_route_cases(path)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["duplicate_ids"], ["dup"])
 
     def test_load_route_cases_accepts_pipe_tiers_and_jsonl_comments(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

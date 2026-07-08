@@ -23,6 +23,9 @@ jobs:
       - name: Run unit and API contract tests
         run: python -m unittest discover -s tests -v
 
+      - name: Validate route benchmark cases
+        run: python eval_search.py --validate-route-cases
+
       - name: Compile Python sources
         run: python -m compileall -q -x '(\.git|__pycache__|\.venv|venv|data|skills_library|content_blobs|eval-results)' .
 

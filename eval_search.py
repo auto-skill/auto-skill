@@ -14,6 +14,7 @@ sibling auto-skill-connector repo and can't silently regress unnoticed here.
 Run:
   python eval_search.py
   python eval_search.py --json-out eval-results/latest.json
+  python eval_search.py --validate-route-cases
 """
 import argparse
 import asyncio
@@ -175,6 +176,42 @@ def _load_route_cases(path: Path) -> list[dict]:
     return cases
 
 
+def _validate_route_cases(path: Path) -> dict:
+    cases = _load_route_cases(path)
+    ids = [case["id"] for case in cases]
+    duplicate_ids = sorted({case_id for case_id in ids if ids.count(case_id) > 1})
+    invalid_tiers = {
+        case["id"]: sorted(case["expected_tiers"] - {"full", "hint", "none"})
+        for case in cases
+        if case["expected_tiers"] - {"full", "hint", "none"}
+    }
+    platform_traps = [case for case in cases if "platform-trap" in case["tags"]]
+    direct_hits = [case for case in cases if "direct-hit" in case["tags"]]
+    negatives = [case for case in cases if "negative" in case["tags"]]
+    failures = []
+    if duplicate_ids:
+        failures.append(f"duplicate ids: {', '.join(duplicate_ids)}")
+    if invalid_tiers:
+        failures.append(f"invalid expected tiers: {invalid_tiers}")
+    if not platform_traps:
+        failures.append("no platform-trap cases")
+    if not direct_hits:
+        failures.append("no direct-hit cases")
+    if not negatives:
+        failures.append("no negative cases")
+    return {
+        "case_file": str(path),
+        "total": len(cases),
+        "platform_traps": len(platform_traps),
+        "direct_hits": len(direct_hits),
+        "negatives": len(negatives),
+        "duplicate_ids": duplicate_ids,
+        "invalid_tiers": invalid_tiers,
+        "failures": failures,
+        "ok": not failures,
+    }
+
+
 def _skill_text(value) -> str:
     if not isinstance(value, dict):
         return ""
@@ -254,6 +291,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_ROUTE_CASES_PATH,
         help="JSONL route benchmark cases",
     )
+    parser.add_argument(
+        "--validate-route-cases",
+        action="store_true",
+        help="validate the route benchmark JSONL file and exit without network or embeddings",
+    )
     return parser.parse_args()
 
 
@@ -280,6 +322,17 @@ async def run_engine(client: httpx.AsyncClient, engine: str, query: str, vec: li
 
 async def main() -> int:
     args = parse_args()
+    if args.validate_route_cases:
+        result = _validate_route_cases(args.route_cases)
+        print(
+            "route cases: "
+            f"total={result['total']}, platform_traps={result['platform_traps']}, "
+            f"direct_hits={result['direct_hits']}, negatives={result['negatives']}"
+        )
+        for failure in result["failures"]:
+            print(f"  FAIL: {failure}")
+        return 0 if result["ok"] else 1
+
     summary = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "base_url": SUPABASE_URL,
