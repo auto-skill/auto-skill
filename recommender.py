@@ -21,6 +21,7 @@ import json
 import os
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from math import ceil
 
@@ -604,6 +605,7 @@ async def route(body: RouteRequest):
     content_url = None
     skill = _public_skill(results[0]) if results else None
     content_ms = 0
+    route_id = str(uuid.uuid4())
 
     if tier == "full" and skill:
         content_start = time.monotonic()
@@ -656,6 +658,7 @@ async def route(body: RouteRequest):
         {
             "client": body.client[:80],
             "client_version": body.client_version[:80],
+            "id": route_id,
             "query_hash": _query_hash(query),
             "query_chars": len(query),
             "tier": tier,
@@ -679,6 +682,7 @@ async def route(body: RouteRequest):
         "skill": skill,
         "content": content,
         "content_url": content_url,
+        "route_id": route_id,
         "score_debug": debug,
         "config_version": CONFIG_VERSION,
         "ttl": ROUTE_TTL_SECONDS,

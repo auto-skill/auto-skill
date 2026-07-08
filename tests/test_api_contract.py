@@ -148,6 +148,7 @@ class ApiContractTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["tier"], "full")
         self.assertEqual(body["skill"]["name"], "spreadsheet-reporter")
+        self.assertTrue(body["route_id"])
         self.assertIn("validate sheet names", body["content"])
         self.assertTrue(body["content_url"].startswith("/content/"))
         self.assertEqual(body["score_debug"]["quality_status"], "active")
@@ -164,6 +165,7 @@ class ApiContractTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertIsNotNone(event)
+        self.assertEqual(event["id"], body["route_id"])
         self.assertEqual(event["tier"], "full")
         self.assertEqual(event["skill_name"], "spreadsheet-reporter")
         self.assertGreater(event["response_tokens"], 0)
@@ -192,6 +194,7 @@ class ApiContractTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
+        self.assertTrue(body["route_id"])
         self.assertEqual(body["tier"], "hint")
         self.assertIsNone(body["content"])
         self.assertTrue(body["score_debug"]["platform_mismatch"])

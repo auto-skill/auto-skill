@@ -16,6 +16,7 @@ Run:  python eval_search.py
 import asyncio
 import os
 import re
+import sys
 
 import httpx
 
@@ -153,7 +154,7 @@ async def run_engine(client: httpx.AsyncClient, engine: str, query: str, vec: li
     return r.json()
 
 
-async def main():
+async def main() -> int:
     queries = [q for q, _ in CASES]
     vectors = await asyncio.to_thread(embed_texts, queries)
 
@@ -225,6 +226,9 @@ async def main():
         gate_ok += ok
         print(f"  content-gate {'OK ' if ok else 'FAIL'}  {label}  (bad={is_bad}, expected={expect_bad})")
     print(f"content-quality gates: {gate_ok}/{len(CONTENT_GATE_CASES)} passed")
+    hard_failures = 0
+    if gate_ok != len(CONTENT_GATE_CASES):
+        hard_failures += len(CONTENT_GATE_CASES) - gate_ok
 
     # Route contract benchmark: keep correctness, latency, and token churn in
     # one report so routing changes cannot improve relevance while silently
@@ -246,6 +250,7 @@ async def main():
             response_tokens = int(metrics.get("response_tokens") or 0)
             ok = (
                 r.status_code == 200
+                and bool(body.get("route_id"))
                 and tier in allowed_tiers
                 and not (label == "landing page platform trap" and tier == "full" and "landingi" in skill_blob)
                 and latency_ms <= ROUTE_LATENCY_BUDGET_MS
@@ -262,7 +267,15 @@ async def main():
         f"(latency_budget_ms={ROUTE_LATENCY_BUDGET_MS}, "
         f"response_token_budget={ROUTE_RESPONSE_TOKEN_BUDGET})"
     )
+    if route_ok != len(ROUTE_CASES):
+        hard_failures += len(ROUTE_CASES) - route_ok
+
+    if hard_failures:
+        print(f"eval_search: {hard_failures} hard failure(s)")
+        return 1
+    print("eval_search: hard gates passed")
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
