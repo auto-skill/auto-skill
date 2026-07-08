@@ -37,7 +37,7 @@ python launch_check.py --base-url https://skills.yourdomain.com --mcp-health-url
 For a local dry run before the API is running:
 
 ```powershell
-python launch_check.py --skip-http --skip-docker --skip-env
+python launch_check.py --skip-http --skip-docker --skip-env --skip-local
 ```
 
 ## Current Windows Host Update

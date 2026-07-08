@@ -29,6 +29,9 @@ jobs:
       - name: Run compose launch preflight
         run: python deploy/compose_preflight.py --env-file deploy/.env.ci --skip-seed-checks
 
+      - name: Run offline launch preflight
+        run: python launch_check.py --env-file deploy/.env.ci --skip-local --skip-http --skip-docker
+
       - name: Compile Python sources
         run: python -m compileall -q -x '(\.git|__pycache__|\.venv|venv|data|skills_library|content_blobs|eval-results)' .
 

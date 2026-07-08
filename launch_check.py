@@ -7,7 +7,7 @@ starting the compose stack:
 
 For a local dry run without a server:
 
-    python launch_check.py --skip-http --skip-docker --skip-env
+    python launch_check.py --skip-http --skip-docker --skip-env --skip-local
 """
 
 from __future__ import annotations
