@@ -61,6 +61,10 @@ def _default_db_path() -> Path:
 
 
 def _json_request(base_url: str, method: str, path: str, body: dict | None = None, headers: dict | None = None):
+    return _json_url_request(f"{base_url.rstrip('/')}{path}", method, body, headers)
+
+
+def _json_url_request(url: str, method: str = "GET", body: dict | None = None, headers: dict | None = None):
     data = None if body is None else json.dumps(body).encode("utf-8")
     request_headers = {
         "Accept": "application/json",
@@ -70,7 +74,7 @@ def _json_request(base_url: str, method: str, path: str, body: dict | None = Non
         request_headers["Content-Type"] = "application/json"
     if headers:
         request_headers.update(headers)
-    req = request.Request(f"{base_url.rstrip('/')}{path}", data=data, headers=request_headers, method=method)
+    req = request.Request(url, data=data, headers=request_headers, method=method)
     try:
         with request.urlopen(req, timeout=15) as response:
             text = response.read().decode("utf-8", errors="replace")
@@ -314,6 +318,20 @@ def check_http(
         reporter.fail("public write guard", f"expected 403 for forwarded /scrape, got status={status}, body={body}")
 
 
+def check_mcp_health(reporter: Reporter, health_url: str) -> None:
+    if not health_url.strip():
+        return
+    try:
+        status, body = _json_url_request(health_url.strip())
+    except Exception as exc:
+        reporter.fail("mcp health", f"{health_url} failed: {exc}")
+        return
+    if status == 200 and body.get("ok") is True:
+        reporter.pass_("mcp health", json.dumps(body, sort_keys=True)[:220])
+    else:
+        reporter.fail("mcp health", f"status={status}, body={body}")
+
+
 def check_docker(reporter: Reporter, env_file: Path) -> None:
     if shutil.which("docker") is None:
         reporter.warn("docker", "docker is not installed on this machine; run compose config on the host")
@@ -340,6 +358,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-embedded", type=int, default=1)
     parser.add_argument("--max-route-latency-ms", type=int, default=1500)
     parser.add_argument("--max-route-response-tokens", type=int, default=3500)
+    parser.add_argument(
+        "--mcp-health-url",
+        default=os.getenv("AUTOSKILL_MCP_HEALTH_URL", ""),
+        help="optional connector MCP health endpoint, for example https://mcp.example.com/healthz",
+    )
     parser.add_argument("--skip-env", action="store_true")
     parser.add_argument("--skip-local", action="store_true")
     parser.add_argument("--skip-http", action="store_true")
@@ -365,6 +388,7 @@ def main() -> int:
             args.max_route_latency_ms,
             args.max_route_response_tokens,
         )
+        check_mcp_health(reporter, args.mcp_health_url)
     if not args.skip_docker:
         check_docker(reporter, args.env_file)
 

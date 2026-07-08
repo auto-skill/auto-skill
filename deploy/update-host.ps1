@@ -1,6 +1,7 @@
 param(
     [string]$Branch = "main",
     [string]$BaseUrl = "https://skills.avalahome.com",
+    [string]$McpHealthUrl = "https://mcp.avalahome.com/healthz",
     [switch]$AllowDirty,
     [switch]$SkipPull,
     [switch]$SkipInstall,
@@ -45,6 +46,7 @@ Write-Host "Auto-Skill host update"
 Write-Host "Repo: $RepoRoot"
 Write-Host "Target branch: $Branch"
 Write-Host "Public URL: $BaseUrl"
+Write-Host "MCP health URL: $McpHealthUrl"
 
 Assert-CleanTree
 
@@ -107,7 +109,7 @@ Write-Host "  - Cloudflare tunnel: start_cloudflared.ps1, only if the tunnel pro
 
 if (-not $SkipLaunchCheck) {
     Invoke-Native "public launch preflight" {
-        python launch_check.py --base-url $BaseUrl --skip-env --skip-docker
+        python launch_check.py --base-url $BaseUrl --mcp-health-url $McpHealthUrl --skip-env --skip-docker
     }
 }
 

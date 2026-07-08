@@ -11,6 +11,8 @@
    the localhost API at `127.0.0.1:8000`, so the API must be running.
 6. Verify:
    - `GET /healthz` returns `{"ok": true}`.
+   - `GET https://mcp.yourdomain.com/healthz` returns `{"ok": true}` after
+     the connector HTTP supervisor and Cloudflare tunnel are running.
    - `GET /readyz` returns `ok=true` with nonzero total, active, and embedded
      row counts, plus `scraper.running_stale=0` and at most one fresh running
      scrape.
@@ -26,7 +28,7 @@
 7. Run the launch preflight:
 
 ```powershell
-python launch_check.py --base-url https://skills.yourdomain.com
+python launch_check.py --base-url https://skills.yourdomain.com --mcp-health-url https://mcp.yourdomain.com/healthz
 ```
 
 For a local dry run before the API is running:
@@ -79,7 +81,7 @@ python reindex.py
 Finally prove the public service is serving the new code:
 
 ```powershell
-python launch_check.py --base-url https://skills.avalahome.com --skip-env --skip-docker
+python launch_check.py --base-url https://skills.avalahome.com --mcp-health-url https://mcp.avalahome.com/healthz --skip-env --skip-docker
 ```
 
 Inspect route analytics locally on the host:
