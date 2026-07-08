@@ -121,6 +121,20 @@ def _metric_rows(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str
                 "kind": "number",
             },
             {
+                "name": "route_benchmark.avg_skill_find_ms",
+                "before": _mean_case_value(before, "skill_find_ms"),
+                "after": _mean_case_value(after, "skill_find_ms"),
+                "higher_is_better": False,
+                "kind": "number",
+            },
+            {
+                "name": "route_benchmark.avg_injected_tokens",
+                "before": _mean_case_value(before, "injected_tokens"),
+                "after": _mean_case_value(after, "injected_tokens"),
+                "higher_is_better": False,
+                "kind": "number",
+            },
+            {
                 "name": "route_benchmark.avg_response_tokens",
                 "before": _mean_case_value(before, "response_tokens"),
                 "after": _mean_case_value(after, "response_tokens"),

@@ -13,6 +13,8 @@ def _snapshot(
     hit1: float = 0.8,
     positive_pass: int = 10,
     latency_ms: int = 100,
+    skill_find_ms: int = 80,
+    injected_tokens: int = 700,
     response_tokens: int = 1000,
 ) -> dict:
     return {
@@ -28,8 +30,18 @@ def _snapshot(
             "passed": 3,
             "total": 3,
             "cases": [
-                {"latency_ms": latency_ms, "response_tokens": response_tokens},
-                {"latency_ms": latency_ms, "response_tokens": response_tokens},
+                {
+                    "latency_ms": latency_ms,
+                    "skill_find_ms": skill_find_ms,
+                    "injected_tokens": injected_tokens,
+                    "response_tokens": response_tokens,
+                },
+                {
+                    "latency_ms": latency_ms,
+                    "skill_find_ms": skill_find_ms,
+                    "injected_tokens": injected_tokens,
+                    "response_tokens": response_tokens,
+                },
             ],
         },
     }
@@ -50,6 +62,8 @@ class EvalCompareTests(unittest.TestCase):
         self.assertEqual(by_name["hybrid.hit1_rate"]["after"], 0.9)
         self.assertEqual(by_name["tier_gate.positive_pass_rate"]["after"], 0.9)
         self.assertEqual(by_name["route_benchmark.avg_latency_ms"]["after"], 120)
+        self.assertEqual(by_name["route_benchmark.avg_skill_find_ms"]["after"], 80)
+        self.assertEqual(by_name["route_benchmark.avg_injected_tokens"]["after"], 700)
         self.assertFalse(by_name["route_benchmark.avg_latency_ms"]["higher_is_better"])
 
     def test_regressions_catch_relevance_drop(self) -> None:

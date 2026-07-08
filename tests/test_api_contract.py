@@ -199,8 +199,11 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(body["score_debug"]["quality_status"], "active")
         metrics = body["score_debug"]["metrics"]
         self.assertGreaterEqual(metrics["latency_ms"], 0)
+        self.assertGreaterEqual(metrics["skill_find_ms"], 0)
         self.assertGreaterEqual(metrics["retrieval_ms"], 0)
+        self.assertGreaterEqual(metrics["rerank_ms"], 0)
         self.assertGreater(metrics["content_tokens"], 0)
+        self.assertEqual(metrics["injected_tokens"], metrics["hint_tokens"] + metrics["content_tokens"])
         self.assertGreater(metrics["response_tokens"], metrics["hint_tokens"])
 
         conn = sqlite3.connect(self.db_path)
@@ -213,6 +216,8 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(event["id"], body["route_id"])
         self.assertEqual(event["tier"], "full")
         self.assertEqual(event["skill_name"], "spreadsheet-reporter")
+        self.assertGreaterEqual(event["skill_find_ms"], 0)
+        self.assertGreaterEqual(event["injected_tokens"], event["content_tokens"])
         self.assertGreater(event["response_tokens"], 0)
 
     def test_route_caps_platform_trap_to_hint(self) -> None:
@@ -256,6 +261,11 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(body["tier"], "hint")
         self.assertIsNone(body["content"])
         self.assertEqual(body["score_debug"]["metrics"]["content_tokens"], 0)
+        self.assertGreater(body["score_debug"]["metrics"]["candidate_tokens"], 0)
+        self.assertEqual(
+            body["score_debug"]["metrics"]["injected_tokens"],
+            body["score_debug"]["metrics"]["candidate_tokens"],
+        )
         self.assertEqual(
             {c["name"] for c in body["candidates"]},
             {"sales-landingi", "landing-page-architect"},
@@ -302,6 +312,9 @@ class ApiContractTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["top_skills"][0]["hint_count"], 1)
         self.assertIn("vector_index", metrics)
         self.assertEqual(metrics["vector_index"]["vector_dim"], 384)
+        self.assertIn("avg_skill_find_ms", metrics)
+        self.assertIn("avg_injected_tokens", metrics)
+        self.assertGreaterEqual(metrics["top_skills"][0]["avg_skill_find_ms"], 0)
         self.assertGreaterEqual(metrics["avg_response_tokens"], 1)
 
     def test_route_feedback_updates_existing_route_event(self) -> None:

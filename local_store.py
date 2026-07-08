@@ -90,12 +90,16 @@ CREATE TABLE IF NOT EXISTS route_events (
     skill_name TEXT,
     skill_url TEXT,
     latency_ms INTEGER,
+    skill_find_ms INTEGER,
     retrieval_ms INTEGER,
+    rerank_ms INTEGER,
     content_ms INTEGER,
     result_count INTEGER,
     input_tokens INTEGER,
     hint_tokens INTEGER,
+    candidate_tokens INTEGER,
     content_tokens INTEGER,
+    injected_tokens INTEGER,
     response_tokens INTEGER,
     config_version TEXT,
     outcome TEXT,
@@ -130,6 +134,10 @@ ROUTE_EVENT_COLUMN_DEFAULTS = {
     "outcome_at": "TEXT",
     "feedback_source": "TEXT",
     "feedback_note": "TEXT",
+    "skill_find_ms": "INTEGER",
+    "rerank_ms": "INTEGER",
+    "candidate_tokens": "INTEGER",
+    "injected_tokens": "INTEGER",
 }
 
 
@@ -383,10 +391,15 @@ def route_event_summary(hours: int = 24) -> dict:
             """
             SELECT
               AVG(latency_ms) AS avg_latency_ms,
+              AVG(skill_find_ms) AS avg_skill_find_ms,
               AVG(retrieval_ms) AS avg_retrieval_ms,
+              AVG(rerank_ms) AS avg_rerank_ms,
               AVG(content_ms) AS avg_content_ms,
+              AVG(injected_tokens) AS avg_injected_tokens,
               AVG(response_tokens) AS avg_response_tokens,
+              MAX(skill_find_ms) AS max_skill_find_ms,
               MAX(latency_ms) AS max_latency_ms,
+              MAX(injected_tokens) AS max_injected_tokens,
               MAX(response_tokens) AS max_response_tokens
             FROM route_events
             WHERE created_at >= ?
@@ -397,8 +410,9 @@ def route_event_summary(hours: int = 24) -> dict:
             dict(r)
             for r in conn.execute(
                 """
-                SELECT created_at, client, tier, skill_name, latency_ms, retrieval_ms,
-                       content_ms, response_tokens, warnings
+                SELECT created_at, client, tier, skill_name, latency_ms, skill_find_ms,
+                       retrieval_ms, rerank_ms, content_ms, injected_tokens,
+                       response_tokens, warnings
                 FROM route_events
                 WHERE created_at >= ?
                 ORDER BY latency_ms DESC
@@ -425,6 +439,8 @@ def route_event_summary(hours: int = 24) -> dict:
                   SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) AS feedback_count,
                   SUM(CASE WHEN outcome IN ('used', 'installed') THEN 1 ELSE 0 END) AS positive_count,
                   AVG(latency_ms) AS avg_latency_ms,
+                  AVG(skill_find_ms) AS avg_skill_find_ms,
+                  AVG(injected_tokens) AS avg_injected_tokens,
                   AVG(response_tokens) AS avg_response_tokens
                 FROM route_events
                 WHERE created_at >= ?
@@ -441,6 +457,8 @@ def route_event_summary(hours: int = 24) -> dict:
             for key in ("count", "full_count", "hint_count", "feedback_count", "positive_count"):
                 skill[key] = int(skill[key] or 0)
             skill["avg_latency_ms"] = int(skill["avg_latency_ms"] or 0)
+            skill["avg_skill_find_ms"] = int(skill["avg_skill_find_ms"] or 0)
+            skill["avg_injected_tokens"] = int(skill["avg_injected_tokens"] or 0)
             skill["avg_response_tokens"] = int(skill["avg_response_tokens"] or 0)
         top_used_skills = [skill for skill in top_skills if skill["positive_count"] > 0]
         top_used_skills.sort(key=lambda s: (-s["positive_count"], -s["count"], s["skill_name"] or ""))
@@ -453,10 +471,15 @@ def route_event_summary(hours: int = 24) -> dict:
             "top_used_skills": top_used_skills[:10],
             "vector_index": vector_index_stats(),
             "avg_latency_ms": int(row["avg_latency_ms"] or 0),
+            "avg_skill_find_ms": int(row["avg_skill_find_ms"] or 0),
             "avg_retrieval_ms": int(row["avg_retrieval_ms"] or 0),
+            "avg_rerank_ms": int(row["avg_rerank_ms"] or 0),
             "avg_content_ms": int(row["avg_content_ms"] or 0),
+            "avg_injected_tokens": int(row["avg_injected_tokens"] or 0),
             "avg_response_tokens": int(row["avg_response_tokens"] or 0),
+            "max_skill_find_ms": int(row["max_skill_find_ms"] or 0),
             "max_latency_ms": int(row["max_latency_ms"] or 0),
+            "max_injected_tokens": int(row["max_injected_tokens"] or 0),
             "max_response_tokens": int(row["max_response_tokens"] or 0),
             "slowest": slowest,
         }

@@ -74,10 +74,12 @@ for local experiments; production `/route` does not depend on an LLM.
 Route responses include `score_debug.metrics` with cheap latency and token
 estimates:
 
-- `latency_ms`, `retrieval_ms`, and `content_ms` track skill-find time.
-- `input_tokens`, `hint_tokens`, `content_tokens`, and `response_tokens` track
-  token churn.
-- Defaults warn above 1500 ms or 3500 response tokens.
+- `latency_ms`, `skill_find_ms`, `retrieval_ms`, `rerank_ms`, and `content_ms`
+  separate the route budget from skill lookup time.
+- `input_tokens`, `candidate_tokens`, `hint_tokens`, `content_tokens`,
+  `injected_tokens`, and `response_tokens` track token churn.
+- Defaults warn above 1500 ms total latency, 1200 ms skill-find time, 3000
+  injected tokens, or 3500 response tokens.
 
 When `/route` returns `tier: "hint"`, it also includes up to three
 content-free `candidates` so clients can show a small option set without
@@ -86,8 +88,8 @@ injecting full SKILL.md instructions.
 Each `/route` call also appends a privacy-safe `route_events` row keyed by a
 query hash, not raw prompt text. Use `GET /route-metrics` locally to inspect
 recent tier distribution, slow routes, top routed/used skills, and average
-response token size. The public read-only guard intentionally does not allow
-`/route-metrics` or `/route-feedback`.
+skill-find time and injected token size. The public read-only guard
+intentionally does not allow `/route-metrics` or `/route-feedback`.
 
 ## Deploy Skeleton
 

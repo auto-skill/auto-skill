@@ -212,6 +212,8 @@ def _check_route_budget(
     name: str,
     body: dict,
     max_latency_ms: int,
+    max_skill_find_ms: int,
+    max_injected_tokens: int,
     max_response_tokens: int,
 ) -> None:
     metrics = _route_metrics(body)
@@ -219,13 +221,23 @@ def _check_route_budget(
         reporter.fail(name, "route response did not include score_debug.metrics")
         return
     latency_ms = int(metrics.get("latency_ms") or 0)
+    skill_find_ms = int(metrics.get("skill_find_ms") or metrics.get("retrieval_ms") or 0)
+    injected_tokens = int(metrics.get("injected_tokens") or metrics.get("content_tokens") or 0)
     response_tokens = int(metrics.get("response_tokens") or 0)
     if latency_ms > max_latency_ms:
         reporter.fail(name, f"latency_ms={latency_ms} exceeded budget {max_latency_ms}")
+    elif skill_find_ms > max_skill_find_ms:
+        reporter.fail(name, f"skill_find_ms={skill_find_ms} exceeded budget {max_skill_find_ms}")
+    elif injected_tokens > max_injected_tokens:
+        reporter.fail(name, f"injected_tokens={injected_tokens} exceeded budget {max_injected_tokens}")
     elif response_tokens > max_response_tokens:
         reporter.fail(name, f"response_tokens={response_tokens} exceeded budget {max_response_tokens}")
     else:
-        reporter.pass_(name, f"latency_ms={latency_ms}, response_tokens={response_tokens}")
+        reporter.pass_(
+            name,
+            f"latency_ms={latency_ms}, skill_find_ms={skill_find_ms}, "
+            f"injected_tokens={injected_tokens}, response_tokens={response_tokens}",
+        )
 
 
 def check_http(
@@ -234,6 +246,8 @@ def check_http(
     direct_task: str,
     trap_task: str,
     max_route_latency_ms: int,
+    max_route_skill_find_ms: int,
+    max_route_injected_tokens: int,
     max_route_response_tokens: int,
 ) -> None:
     try:
@@ -283,6 +297,8 @@ def check_http(
             "route direct budget",
             body,
             max_route_latency_ms,
+            max_route_skill_find_ms,
+            max_route_injected_tokens,
             max_route_response_tokens,
         )
     else:
@@ -302,6 +318,8 @@ def check_http(
             "route trap budget",
             body,
             max_route_latency_ms,
+            max_route_skill_find_ms,
+            max_route_injected_tokens,
             max_route_response_tokens,
         )
 
@@ -357,6 +375,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-active", type=int, default=1)
     parser.add_argument("--min-embedded", type=int, default=1)
     parser.add_argument("--max-route-latency-ms", type=int, default=1500)
+    parser.add_argument("--max-route-skill-find-ms", type=int, default=1200)
+    parser.add_argument("--max-route-injected-tokens", type=int, default=3000)
     parser.add_argument("--max-route-response-tokens", type=int, default=3500)
     parser.add_argument(
         "--mcp-health-url",
@@ -386,6 +406,8 @@ def main() -> int:
             args.direct_task,
             args.trap_task,
             args.max_route_latency_ms,
+            args.max_route_skill_find_ms,
+            args.max_route_injected_tokens,
             args.max_route_response_tokens,
         )
         check_mcp_health(reporter, args.mcp_health_url)

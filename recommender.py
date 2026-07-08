@@ -597,12 +597,16 @@ async def route(body: RouteRequest):
         elapsed_ms = int((time.monotonic() - start) * 1000)
         metrics = {
             "latency_ms": elapsed_ms,
+            "skill_find_ms": 0,
             "retrieval_ms": 0,
+            "rerank_ms": 0,
             "content_ms": 0,
             "result_count": 0,
             "input_tokens": 0,
             "hint_tokens": 0,
+            "candidate_tokens": 0,
             "content_tokens": 0,
+            "injected_tokens": 0,
             "response_tokens": 0,
             "latency_warn_ms": ROUTE_LATENCY_WARN_MS,
             "response_token_warn": ROUTE_RESPONSE_TOKEN_WARN,
@@ -622,9 +626,11 @@ async def route(body: RouteRequest):
     async with httpx.AsyncClient() as client:
         results = await retrieve_skills(client, query, limit)
     retrieval_ms = int((time.monotonic() - retrieval_start) * 1000)
+    rerank_start = time.monotonic()
     results = rerank_candidates(query, results)
-
     tier = injection_tier(query, results)
+    rerank_ms = int((time.monotonic() - rerank_start) * 1000)
+    skill_find_ms = int((time.monotonic() - retrieval_start) * 1000)
     warnings: list[str] = []
     content = None
     content_url = None
@@ -654,6 +660,15 @@ async def route(body: RouteRequest):
 
     debug = _score_debug(results, tier)
     candidates = _hint_candidates(results) if tier == "hint" else []
+    input_tokens = _estimate_tokens(query)
+    hint_tokens = _estimate_tokens(skill)
+    candidate_tokens = _estimate_tokens(candidates)
+    content_tokens = _estimate_tokens(content)
+    injected_tokens = 0
+    if tier == "full":
+        injected_tokens = hint_tokens + content_tokens
+    elif tier == "hint":
+        injected_tokens = candidate_tokens
     response_preview = {
         "tier": tier,
         "skill": skill,
@@ -664,12 +679,16 @@ async def route(body: RouteRequest):
     }
     metrics = {
         "latency_ms": int((time.monotonic() - start) * 1000),
+        "skill_find_ms": skill_find_ms,
         "retrieval_ms": retrieval_ms,
+        "rerank_ms": rerank_ms,
         "content_ms": content_ms,
         "result_count": len(results),
-        "input_tokens": _estimate_tokens(query),
-        "hint_tokens": _estimate_tokens(skill),
-        "content_tokens": _estimate_tokens(content),
+        "input_tokens": input_tokens,
+        "hint_tokens": hint_tokens,
+        "candidate_tokens": candidate_tokens,
+        "content_tokens": content_tokens,
+        "injected_tokens": injected_tokens,
         "response_tokens": _estimate_tokens(response_preview),
         "latency_warn_ms": ROUTE_LATENCY_WARN_MS,
         "response_token_warn": ROUTE_RESPONSE_TOKEN_WARN,
@@ -693,12 +712,16 @@ async def route(body: RouteRequest):
             "skill_name": skill.get("name") if skill else None,
             "skill_url": skill.get("source_url") if skill else None,
             "latency_ms": metrics["latency_ms"],
+            "skill_find_ms": skill_find_ms,
             "retrieval_ms": retrieval_ms,
+            "rerank_ms": rerank_ms,
             "content_ms": content_ms,
             "result_count": len(results),
             "input_tokens": metrics["input_tokens"],
             "hint_tokens": metrics["hint_tokens"],
+            "candidate_tokens": metrics["candidate_tokens"],
             "content_tokens": metrics["content_tokens"],
+            "injected_tokens": metrics["injected_tokens"],
             "response_tokens": metrics["response_tokens"],
             "config_version": CONFIG_VERSION,
             "warnings": warnings,

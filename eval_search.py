@@ -130,7 +130,9 @@ CONTENT_GATE_CASES = [
 
 TOP_K = 3
 ROUTE_LATENCY_BUDGET_MS = int(os.getenv("ROUTE_LATENCY_BUDGET_MS", "1500"))
+ROUTE_SKILL_FIND_BUDGET_MS = int(os.getenv("ROUTE_SKILL_FIND_BUDGET_MS", "1200"))
 ROUTE_RESPONSE_TOKEN_BUDGET = int(os.getenv("ROUTE_RESPONSE_TOKEN_BUDGET", "3500"))
+ROUTE_INJECTED_TOKEN_BUDGET = int(os.getenv("ROUTE_INJECTED_TOKEN_BUDGET", "3000"))
 
 ROUTE_CASES = [
     ("spreadsheet full route", "create an excel spreadsheet report with formulas and charts", {"full", "hint"}, 0),
@@ -178,7 +180,9 @@ async def main() -> int:
         "base_url": SUPABASE_URL,
         "budgets": {
             "route_latency_ms": ROUTE_LATENCY_BUDGET_MS,
+            "route_skill_find_ms": ROUTE_SKILL_FIND_BUDGET_MS,
             "route_response_tokens": ROUTE_RESPONSE_TOKEN_BUDGET,
+            "route_injected_tokens": ROUTE_INJECTED_TOKEN_BUDGET,
         },
         "engines": {},
         "retrieval_cases": [],
@@ -321,6 +325,8 @@ async def main() -> int:
             skill_blob = f"{skill.get('name', '')} {skill.get('url', '')} {skill.get('source_url', '')}".lower()
             metrics = ((body.get("score_debug") or {}).get("metrics") or {})
             latency_ms = int(metrics.get("latency_ms") or 0)
+            skill_find_ms = int(metrics.get("skill_find_ms") or metrics.get("retrieval_ms") or 0)
+            injected_tokens = int(metrics.get("injected_tokens") or metrics.get("content_tokens") or 0)
             response_tokens = int(metrics.get("response_tokens") or 0)
             candidates = body.get("candidates") if isinstance(body.get("candidates"), list) else []
             candidate_count = len(candidates)
@@ -331,6 +337,8 @@ async def main() -> int:
                 and not (label == "landing page platform trap" and tier == "full" and "landingi" in skill_blob)
                 and (tier != "hint" or candidate_count >= min_hint_candidates)
                 and latency_ms <= ROUTE_LATENCY_BUDGET_MS
+                and skill_find_ms <= ROUTE_SKILL_FIND_BUDGET_MS
+                and injected_tokens <= ROUTE_INJECTED_TOKEN_BUDGET
                 and response_tokens <= ROUTE_RESPONSE_TOKEN_BUDGET
             )
             route_ok += ok
@@ -341,6 +349,8 @@ async def main() -> int:
                 "tier": tier,
                 "skill": skill.get("name") or skill.get("slug"),
                 "latency_ms": latency_ms,
+                "skill_find_ms": skill_find_ms,
+                "injected_tokens": injected_tokens,
                 "response_tokens": response_tokens,
                 "candidate_count": candidate_count,
                 "ok": ok,
@@ -348,12 +358,15 @@ async def main() -> int:
             print(
                 "  route-bench "
                 f"{'OK ' if ok else 'FAIL'} {label}: tier={tier}, "
-                f"latency_ms={latency_ms}, response_tokens={response_tokens}, "
+                f"latency_ms={latency_ms}, skill_find_ms={skill_find_ms}, "
+                f"injected_tokens={injected_tokens}, response_tokens={response_tokens}, "
                 f"candidates={candidate_count}"
             )
     print(
         f"route benchmark: {route_ok}/{len(ROUTE_CASES)} passed "
         f"(latency_budget_ms={ROUTE_LATENCY_BUDGET_MS}, "
+        f"skill_find_budget_ms={ROUTE_SKILL_FIND_BUDGET_MS}, "
+        f"injected_token_budget={ROUTE_INJECTED_TOKEN_BUDGET}, "
         f"response_token_budget={ROUTE_RESPONSE_TOKEN_BUDGET})"
     )
     if route_ok != len(ROUTE_CASES):

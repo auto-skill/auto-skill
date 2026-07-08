@@ -20,8 +20,9 @@
      charts` returns `full` or `hint`.
    - `POST /route` for `build a landing page for an AI automation agency` does
      not full-route to a Landingi-specific skill.
-   - Route `score_debug.metrics.latency_ms` is under the launch budget and
-     `score_debug.metrics.response_tokens` is not churning excessive context.
+   - Route `score_debug.metrics.latency_ms`,
+     `score_debug.metrics.skill_find_ms`, and
+     `score_debug.metrics.injected_tokens` are under launch budgets.
 6. Confirm public forwarded requests cannot reach write endpoints:
    `/scrape`, `/rescan`, `/normalize-db`, and mutating `/rest/v1/*` should be
    blocked by the read-only guard when forwarded through Cloudflare.
@@ -129,7 +130,8 @@ Check `vector_index.valid_vectors`, `cache_ready`, `cache_vectors`, and
 `matrix_bytes` there before deciding the brute-force NumPy index is the actual
 bottleneck.
 
-Use `top_skills` and `top_used_skills` to spot which routes are valuable,
+Use `avg_skill_find_ms`, `avg_injected_tokens`, `top_skills`, and
+`top_used_skills` to spot which routes are slow, expensive, valuable,
 over-triggered, or need better skill content.
 
 Archive internal eval snapshots before and after routing changes:
