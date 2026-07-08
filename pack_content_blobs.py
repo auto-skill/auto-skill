@@ -51,7 +51,7 @@ def pack_content_blobs(library_dir: Path = DEFAULT_LIBRARY_DIR, output_dir: Path
     files_dir = library_dir / "files"
     if not index_path.exists():
         raise FileNotFoundError(f"{index_path} does not exist")
-    raw_index = json.loads(index_path.read_text(encoding="utf-8", errors="replace"))
+    raw_index = json.loads(index_path.read_text(encoding="utf-8-sig", errors="replace"))
 
     manifest: dict[str, dict] = {}
     missing_files = 0

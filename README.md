@@ -97,6 +97,10 @@ response token size. The public read-only guard intentionally does not allow
 The current app still stores SKILL.md files under `skills_library/`, so that
 directory needs its own backup until content is moved into SQLite.
 
+On the current Windows host, run `.\deploy\backup-local.ps1 -PackContentBlobs`
+before deploys to create a timestamped SQLite/library/blob backup under
+`data\backups\`. Add `-UploadR2` when R2 credentials are available.
+
 For cheaper content-addressed storage, build gzip blobs keyed by normalized
 content hash:
 

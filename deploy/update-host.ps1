@@ -70,6 +70,11 @@ if (-not $SkipTests) {
     Invoke-Native "syntax check" {
         python -m py_compile quality.py local_store.py local_api.py recommender.py scraper.py backfill_quality.py cleanup_scrape_runs.py worker.py reindex.py backfill_embeddings.py embeddings.py mcp_server.py eval_search.py launch_check.py pack_content_blobs.py tests\test_api_contract.py tests\test_quality.py tests\test_quality_routing.py tests\test_content_blobs.py
     }
+    Invoke-Native "PowerShell script parse check" {
+        [scriptblock]::Create((Get-Content -Raw deploy\backup-local.ps1)) | Out-Null
+        [scriptblock]::Create((Get-Content -Raw deploy\restore-local.ps1)) | Out-Null
+        [scriptblock]::Create((Get-Content -Raw deploy\update-host.ps1)) | Out-Null
+    }
 }
 
 Invoke-Native "scrape run cleanup dry run" { python cleanup_scrape_runs.py }

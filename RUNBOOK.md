@@ -2,7 +2,8 @@
 
 ## Alpha Launch Checklist
 
-1. Back up the current `local_skills.db` and `skills_library/`.
+1. Back up the current `local_skills.db` and `skills_library/`:
+   `.\deploy\backup-local.ps1 -PackContentBlobs`.
 2. Run `python backfill_quality.py`.
 3. Run `python -m unittest discover`.
 4. Start the API.
@@ -53,6 +54,7 @@ public `/healthz` but blocked those newer route/readiness endpoints.
 On the host:
 
 ```powershell
+.\deploy\backup-local.ps1 -PackContentBlobs
 git pull --ff-only origin main
 .\deploy\update-host.ps1 -SkipPull -SkipLaunchCheck
 ```
@@ -135,6 +137,26 @@ Cloudflare R2 through the S3-compatible API.
 
 Keep both. SQLite has the searchable metadata and vectors; `skills_library/`
 currently has the SKILL.md content used for full routes and `/content/{hash}`.
+
+On the current Windows tunnel host, take a one-shot backup before deploys:
+
+```powershell
+.\deploy\backup-local.ps1 -PackContentBlobs
+```
+
+That writes a timestamped folder under `data\backups\` containing a SQLite
+online backup, a `skills_library.tgz` archive, optional compressed content
+blobs, and `manifest.json`. To upload the same artifact to R2:
+
+```powershell
+.\deploy\backup-local.ps1 -PackContentBlobs -UploadR2 -R2Prefix alpha-host-backups
+```
+
+If Windows blocks local scripts by execution policy, run the same command as:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\backup-local.ps1 -PackContentBlobs
+```
 
 To prepare deduped compressed content blobs for R2:
 
