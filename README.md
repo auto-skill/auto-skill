@@ -25,6 +25,10 @@ Useful endpoints:
 - `GET /route-metrics` - local-only route latency/token analytics summary.
 - `POST /route-feedback` - local-only privacy-safe route outcome feedback.
 
+Legacy `/chat` recommender endpoints are local-only experiments. The public
+launch route contract is `POST /route`, which is deterministic and reports
+latency/token metrics.
+
 `/readyz` and `/route-metrics` include `vector_index` stats so search latency
 can be correlated with active corpus size, valid embeddings, and embedding
 matrix cache state before moving to a new vector backend. `/readyz` also

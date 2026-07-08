@@ -325,6 +325,7 @@ def check_http(
 
     guarded_paths = [
         ("POST", "/scrape", {}),
+        ("POST", "/chat", {"messages": [{"role": "user", "content": "find a spreadsheet skill"}]}),
         ("POST", "/seed-backlog", {}),
         ("POST", "/normalize-db", {}),
         ("GET", "/normalize-db/progress", None),

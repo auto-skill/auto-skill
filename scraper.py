@@ -44,7 +44,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # mcp_server) do not. Public callers get search/read endpoints only -- the
 # local REST surface has no auth, so every write path must stay loopback-only.
 PUBLIC_GET_PATHS = {"/", "/healthz", "/readyz", "/status", "/find-semantic", "/skills", "/library", "/rest/v1/skills"}
-PUBLIC_POST_RE = re.compile(r"^(/chat|/route|/rest/v1/rpc/(search_skills|vector_search_skills|hybrid_search_skills))$")
+PUBLIC_POST_RE = re.compile(r"^(/route|/rest/v1/rpc/(search_skills|vector_search_skills|hybrid_search_skills))$")
 
 
 @app.middleware("http")

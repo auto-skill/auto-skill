@@ -149,6 +149,7 @@ class ApiContractTests(unittest.TestCase):
         )
         probes = [
             ("post", "/scrape", None),
+            ("post", "/chat", {"messages": [{"role": "user", "content": "find a spreadsheet skill"}]}),
             ("post", "/seed-backlog", None),
             ("post", "/normalize-db", None),
             ("get", "/normalize-db/progress", None),
