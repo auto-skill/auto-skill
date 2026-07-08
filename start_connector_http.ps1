@@ -13,7 +13,30 @@ $env:MCP_ALLOWED_HOSTS = "mcp.avalahome.com,localhost:8765,127.0.0.1:8765"
 # to it directly over loopback instead.
 if (-not $env:AUTOSKILL_URL) { $env:AUTOSKILL_URL = "http://localhost:8000" }
 
-$connectorDir = "$PSScriptRoot\..\auto-skill-connector"
+$connectorCandidates = @()
+if ($env:AUTO_SKILL_CONNECTOR_DIR) {
+    $connectorCandidates += $env:AUTO_SKILL_CONNECTOR_DIR
+}
+$connectorCandidates += @(
+    (Join-Path $PSScriptRoot "..\auto-skill-connector"),
+    (Join-Path $PSScriptRoot "..\..\Skills"),
+    (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Skills")
+)
+
+$connectorDir = $null
+foreach ($candidate in $connectorCandidates) {
+    if (-not $candidate) { continue }
+    $serverPath = Join-Path $candidate "mcp_server.py"
+    if (Test-Path -LiteralPath $serverPath) {
+        $connectorDir = (Resolve-Path -LiteralPath $candidate).Path
+        break
+    }
+}
+
+if (-not $connectorDir) {
+    Add-Content -Path "$PSScriptRoot\connector_http.log" -Value "$(Get-Date -Format o) [start_connector_http] connector checkout not found. Set AUTO_SKILL_CONNECTOR_DIR to the auto-skill-connector repo."
+    throw "Connector checkout not found. Set AUTO_SKILL_CONNECTOR_DIR to the auto-skill-connector repo."
+}
 
 while ($true) {
     python "$connectorDir\mcp_server.py" *>> "$PSScriptRoot\connector_http.log"

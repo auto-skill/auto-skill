@@ -43,7 +43,9 @@ Cloudflare Tunnel:
 - `start_scraper.ps1`: starts `python scraper.py`, which serves the FastAPI API
   on `localhost:8000` and can also run the scraper loop.
 - `start_connector_http.ps1`: starts the connector MCP HTTP service on
-  `localhost:8765`.
+  `localhost:8765`. It auto-detects common connector checkout locations; set
+  `AUTO_SKILL_CONNECTOR_DIR` before launching if the connector repo lives
+  somewhere else.
 - `start_cloudflared.ps1`: exposes `skills.avalahome.com` and
   `mcp.avalahome.com` to those local ports.
 

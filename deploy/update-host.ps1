@@ -74,6 +74,9 @@ if (-not $SkipTests) {
         [scriptblock]::Create((Get-Content -Raw deploy\backup-local.ps1)) | Out-Null
         [scriptblock]::Create((Get-Content -Raw deploy\restore-local.ps1)) | Out-Null
         [scriptblock]::Create((Get-Content -Raw deploy\update-host.ps1)) | Out-Null
+        [scriptblock]::Create((Get-Content -Raw start_cloudflared.ps1)) | Out-Null
+        [scriptblock]::Create((Get-Content -Raw start_connector_http.ps1)) | Out-Null
+        [scriptblock]::Create((Get-Content -Raw start_scraper.ps1)) | Out-Null
     }
 }
 

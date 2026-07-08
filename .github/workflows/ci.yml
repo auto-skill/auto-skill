@@ -39,6 +39,9 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw deploy/backup-local.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw deploy/restore-local.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw deploy/update-host.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw start_cloudflared.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw start_connector_http.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw start_scraper.ps1)) | Out-Null
 
       - name: Validate docker compose
         run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.yml config
