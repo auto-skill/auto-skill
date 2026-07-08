@@ -221,6 +221,32 @@ The compose file uses bind mounts instead of opaque Docker volumes:
 Seed a VPS by copying the current DB and library into those paths before the
 first `docker compose up`.
 
+## Hosting Upgrade Ladder
+
+Use this ladder to keep the alpha launch practical without pretending the
+current laptop tunnel is production hosting:
+
+1. Current emergency host: Windows restart loops plus Cloudflare Tunnel. This
+   is acceptable for local debugging and recovery only. Any Cloudflare
+   `1033`/HTTP `530` from `launch_check.py` means the public alpha is down.
+2. Launch target: one cheap VPS or small VM running `deploy/docker-compose.yml`.
+   Keep SQLite on the host disk, replicate it with Litestream to R2, back up
+   `skills_library/` to R2, and run exactly one `worker` scraper process.
+3. Managed-host fallback: if a VPS is too much operational work, use a service
+   with a persistent disk and a background worker. Keep the same SQLite/R2
+   model and the same `launch_check.py` gate.
+4. Hosted DB migration: move to Turso/libSQL, Postgres/pgvector, or another
+   online vector store only after metrics prove a reason. Valid reasons are
+   repeated host reliability failures after the VPS move, SQLite write
+   contention, a need for multiple live reader regions, or route metrics
+   showing `skill_find_ms`/vector cache growth as the bottleneck.
+
+Do not split storage just because raw skill files feel awkward. For alpha,
+SQLite plus `skills_library/` backups are cheaper to operate than a new online
+DB, object store read path, and migration surface. R2 is useful now for
+backups and content-addressed blob exports; it should become runtime storage
+only after `/content/{hash}` has a local cache and restore drill.
+
 ## Hosted Storage Decision
 
 For alpha, keep runtime state boring:
