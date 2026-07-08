@@ -248,10 +248,15 @@ function Test-ListeningPort {
         $processes = @()
         foreach ($listener in $listeners) {
             $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+            $commandLine = ""
+            if ($cim -and $cim.CommandLine) {
+                $commandLine = " cmd=$($cim.CommandLine)"
+            }
             if ($process) {
-                $processes += "$($process.ProcessName):$($process.Id)"
+                $processes += "$($process.ProcessName):$($process.Id)$commandLine"
             } else {
-                $processes += "pid:$($listener.OwningProcess)"
+                $processes += "pid:$($listener.OwningProcess)$commandLine"
             }
         }
         $uniqueProcesses = $processes | Sort-Object -Unique

@@ -114,6 +114,16 @@ on the Windows host:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\recover-host.ps1
 ```
 
+If `/healthz` still serves the stale `{"ok":true,"db_reachable":true}` body
+after a normal recovery, an old Python process may still own port `8000`.
+Inspect `.\deploy\diagnose-host.ps1`; if the listener command line is an
+Auto-Skill scraper/MCP process, rerun recovery with scoped stale-listener
+cleanup:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\recover-host.ps1 -StopStalePortOwners
+```
+
 If you only want a read-only failure packet, run:
 
 ```powershell

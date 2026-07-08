@@ -12,7 +12,8 @@ param(
     [switch]$SkipTests,
     [switch]$SkipTaskInstall,
     [switch]$SkipBackupTask,
-    [switch]$SkipLaunchCheck
+    [switch]$SkipLaunchCheck,
+    [switch]$StopStalePortOwners
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +37,63 @@ function Invoke-Step {
 function Test-TaskMissing {
     param([string]$Name)
     return $null -eq (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)
+}
+
+function Get-UriValue {
+    param([string]$Url)
+    try {
+        return [Uri]$Url
+    } catch {
+        throw "Could not parse URL '$Url': $($_.Exception.Message)"
+    }
+}
+
+function Get-EndpointPort {
+    param($Uri)
+    if ($Uri.Port -gt 0) {
+        return $Uri.Port
+    }
+    if ($Uri.Scheme -eq "https") {
+        return 443
+    }
+    return 80
+}
+
+function Stop-ScopedPortOwners {
+    param(
+        [string]$Name,
+        [int]$Port,
+        [string[]]$AllowedCommandPatterns
+    )
+
+    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    if (-not $listeners) {
+        Write-Host "[PASS] $Name`: no existing listener on port $Port"
+        return
+    }
+
+    foreach ($listener in $listeners) {
+        $pidValue = [int]$listener.OwningProcess
+        $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction SilentlyContinue
+        $commandLine = if ($cim -and $cim.CommandLine) { [string]$cim.CommandLine } else { "" }
+        $identity = "$(if ($process) { $process.ProcessName } else { 'pid' }):$pidValue $commandLine"
+
+        $matched = $false
+        foreach ($pattern in $AllowedCommandPatterns) {
+            if ($identity -match $pattern) {
+                $matched = $true
+                break
+            }
+        }
+        if (-not $matched) {
+            Write-Host "[WARN] $Name`: not stopping non-Auto-Skill listener on port ${Port}: $identity"
+            continue
+        }
+
+        Write-Host "[WARN] $Name`: stopping stale Auto-Skill listener on port ${Port}: $identity"
+        Stop-Process -Id $pidValue -Force -ErrorAction Stop
+    }
 }
 
 function Wait-JsonOk {
@@ -76,6 +134,9 @@ Write-Host "Public URL: $BaseUrl"
 Write-Host "MCP health URL: $McpHealthUrl"
 
 try {
+    $apiPort = Get-EndpointPort (Get-UriValue $LocalApiUrl)
+    $mcpPort = Get-EndpointPort (Get-UriValue $LocalMcpHealthUrl)
+
     $serviceTasks = @("$TaskPrefix-API", "$TaskPrefix-MCP", "$TaskPrefix-Tunnel")
     $missingTasks = @($serviceTasks | Where-Object { Test-TaskMissing $_ })
     if ($missingTasks.Count -gt 0) {
@@ -92,6 +153,13 @@ try {
         }
     } else {
         Write-Host "[PASS] scheduled tasks installed: $($serviceTasks -join ', ')"
+    }
+
+    if ($StopStalePortOwners) {
+        Invoke-Step "stop scoped stale local listeners" {
+            Stop-ScopedPortOwners "local API" $apiPort @("scraper\.py", "start_scraper\.ps1")
+            Stop-ScopedPortOwners "local MCP" $mcpPort @("mcp_server\.py", "start_connector_http\.ps1")
+        }
     }
 
     $updateArgs = @(
