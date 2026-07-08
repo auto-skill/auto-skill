@@ -87,6 +87,9 @@ Check `vector_index.valid_vectors`, `cache_ready`, `cache_vectors`, and
 `matrix_bytes` there before deciding the brute-force NumPy index is the actual
 bottleneck.
 
+Use `top_skills` and `top_used_skills` to spot which routes are valuable,
+over-triggered, or need better skill content.
+
 Route outcome feedback is also local-only:
 
 ```powershell

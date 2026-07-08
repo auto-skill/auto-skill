@@ -412,11 +412,45 @@ def route_event_summary(hours: int = 24) -> dict:
                 event["warnings"] = json.loads(event.get("warnings") or "[]")
             except Exception:
                 event["warnings"] = []
+        top_skills = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT
+                  skill_name,
+                  skill_url,
+                  COUNT(*) AS count,
+                  SUM(CASE WHEN tier='full' THEN 1 ELSE 0 END) AS full_count,
+                  SUM(CASE WHEN tier='hint' THEN 1 ELSE 0 END) AS hint_count,
+                  SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) AS feedback_count,
+                  SUM(CASE WHEN outcome IN ('used', 'installed') THEN 1 ELSE 0 END) AS positive_count,
+                  AVG(latency_ms) AS avg_latency_ms,
+                  AVG(response_tokens) AS avg_response_tokens
+                FROM route_events
+                WHERE created_at >= ?
+                  AND skill_name IS NOT NULL
+                  AND skill_name != ''
+                GROUP BY skill_name, skill_url
+                ORDER BY count DESC, positive_count DESC, skill_name ASC
+                LIMIT 10
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+        ]
+        for skill in top_skills:
+            for key in ("count", "full_count", "hint_count", "feedback_count", "positive_count"):
+                skill[key] = int(skill[key] or 0)
+            skill["avg_latency_ms"] = int(skill["avg_latency_ms"] or 0)
+            skill["avg_response_tokens"] = int(skill["avg_response_tokens"] or 0)
+        top_used_skills = [skill for skill in top_skills if skill["positive_count"] > 0]
+        top_used_skills.sort(key=lambda s: (-s["positive_count"], -s["count"], s["skill_name"] or ""))
         return {
             "window_hours": hours,
             "total": total,
             "tiers": tiers,
             "outcomes": outcomes,
+            "top_skills": top_skills,
+            "top_used_skills": top_used_skills[:10],
             "vector_index": vector_index_stats(),
             "avg_latency_ms": int(row["avg_latency_ms"] or 0),
             "avg_retrieval_ms": int(row["avg_retrieval_ms"] or 0),

@@ -70,9 +70,9 @@ estimates:
 
 Each `/route` call also appends a privacy-safe `route_events` row keyed by a
 query hash, not raw prompt text. Use `GET /route-metrics` locally to inspect
-recent tier distribution, slow routes, and average response token size. The
-public read-only guard intentionally does not allow `/route-metrics` or
-`/route-feedback`.
+recent tier distribution, slow routes, top routed/used skills, and average
+response token size. The public read-only guard intentionally does not allow
+`/route-metrics` or `/route-feedback`.
 
 ## Deploy Skeleton
 

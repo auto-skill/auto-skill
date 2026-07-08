@@ -245,6 +245,8 @@ class ApiContractTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["total"], 1)
         self.assertGreaterEqual(metrics["tiers"]["hint"], 1)
         self.assertGreaterEqual(metrics["outcomes"]["pending"], 1)
+        self.assertEqual(metrics["top_skills"][0]["skill_name"], "spreadsheet-reporter")
+        self.assertGreaterEqual(metrics["top_skills"][0]["hint_count"], 1)
         self.assertIn("vector_index", metrics)
         self.assertEqual(metrics["vector_index"]["vector_dim"], 384)
         self.assertGreaterEqual(metrics["avg_response_tokens"], 1)
@@ -290,6 +292,10 @@ class ApiContractTests(unittest.TestCase):
             conn.close()
         self.assertEqual(event["outcome"], "used")
         self.assertEqual(event["feedback_source"], "unit-test")
+
+        metrics = self.client.get("/route-metrics").json()
+        self.assertEqual(metrics["top_used_skills"][0]["skill_name"], "spreadsheet-reporter")
+        self.assertGreaterEqual(metrics["top_used_skills"][0]["positive_count"], 1)
 
     def test_route_feedback_rejects_unknown_outcome(self) -> None:
         response = self.client.post(
