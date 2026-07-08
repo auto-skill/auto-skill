@@ -45,5 +45,44 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw start_connector_http.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw start_scraper.ps1)) | Out-Null
 
+      - name: Smoke backup script and retention pruning
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "autoskill-backup-smoke"
+          Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+          $db = Join-Path $root "local_skills.db"
+          python -c "import sqlite3, sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table skills(id integer primary key, name text)'); c.execute('insert into skills(name) values (?)', ('demo',)); c.commit(); c.close()" $db
+
+          $library = Join-Path $root "skills_library"
+          $files = Join-Path $library "files"
+          New-Item -ItemType Directory -Force -Path $files | Out-Null
+          Set-Content -LiteralPath (Join-Path $files "demo.md") -Encoding utf8 -Value "---`nname: demo`n---`n`n## Workflow`nUse when testing backups."
+          Set-Content -LiteralPath (Join-Path $library "index.json") -Encoding utf8 -Value '{"https://example.com/demo":{"file":"demo.md"}}'
+
+          $backups = Join-Path $root "backups"
+          $old = Join-Path $backups "20200101T000000Z"
+          $keep = Join-Path $backups "not-a-backup"
+          New-Item -ItemType Directory -Force -Path $old, $keep | Out-Null
+          Set-Content -LiteralPath (Join-Path $old "manifest.json") -Value "{}"
+          Set-Content -LiteralPath (Join-Path $keep "note.txt") -Value "keep"
+          (Get-Item -LiteralPath $old).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddDays(-10)
+
+          ./deploy/backup-local.ps1 -DbPath $db -LibraryDir $library -OutputDir $backups -PackContentBlobs -RetentionDays 1
+
+          if (Test-Path -LiteralPath $old) { throw "old timestamp backup was not pruned" }
+          if (-not (Test-Path -LiteralPath $keep)) { throw "non-backup directory was pruned" }
+          $latest = Get-ChildItem -LiteralPath $backups -Directory |
+            Where-Object { $_.Name -match '^\d{8}T\d{6}Z$' } |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          if (-not $latest) { throw "new timestamp backup directory missing" }
+          foreach ($required in @("local_skills.db", "skills_library.tgz", "manifest.json", "content_blobs")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $latest.FullName $required))) {
+              throw "backup artifact missing: $required"
+            }
+          }
+
       - name: Validate docker compose
         run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.yml config
