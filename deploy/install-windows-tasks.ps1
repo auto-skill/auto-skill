@@ -1,6 +1,9 @@
 param(
     [string]$TaskPrefix = "AutoSkill",
+    [string]$BackupAt = "03:15",
     [switch]$StartNow,
+    [switch]$SkipBackupTask,
+    [switch]$UploadBackupR2,
     [switch]$Unregister,
     [switch]$DryRun
 )
@@ -25,6 +28,21 @@ $Tasks = @(
         Description = "Auto-Skill Cloudflare Tunnel restart loop"
     }
 )
+
+$backupScript = Join-Path $RepoRoot "deploy\backup-local.ps1"
+if (-not $SkipBackupTask) {
+    $backupArgs = @("-PackContentBlobs")
+    if ($UploadBackupR2) {
+        $backupArgs += "-UploadR2"
+    }
+    $Tasks += @{
+        Name = "$TaskPrefix-Backup"
+        Script = $backupScript
+        ScriptArgs = $backupArgs
+        Description = "Auto-Skill daily SQLite, skills library, and content blob backup"
+        Trigger = "daily"
+    }
+}
 
 function Write-Step {
     param([string]$Message)
@@ -66,8 +84,10 @@ foreach ($task in $Tasks) {
 }
 
 $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-$settings = New-ScheduledTaskSettingsSet `
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+$backupAtTime = [datetime]::Parse($BackupAt)
+$dailyTrigger = New-ScheduledTaskTrigger -Daily -At $backupAtTime
+$loopSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Days 999) `
@@ -75,12 +95,27 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -StartWhenAvailable
+$backupSettings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 6) `
+    -MultipleInstances IgnoreNew `
+    -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 
 foreach ($task in $Tasks) {
     $scriptPath = [string]$task.Script
+    $scriptArgs = @()
+    if ($task.ScriptArgs) {
+        $scriptArgs = @($task.ScriptArgs)
+    }
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+    if ($scriptArgs.Count -gt 0) {
+        $arguments = "$arguments $($scriptArgs -join ' ')"
+    }
     $action = New-ScheduledTaskAction -Execute $powerShellExe -Argument $arguments -WorkingDirectory $RepoRoot
+    $trigger = $(if ($task.Trigger -eq "daily") { $dailyTrigger } else { $logonTrigger })
+    $settings = $(if ($task.Trigger -eq "daily") { $backupSettings } else { $loopSettings })
     $definition = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description $task.Description
 
     if ($DryRun) {
@@ -88,6 +123,7 @@ foreach ($task in $Tasks) {
         Write-Host "  Execute: $powerShellExe"
         Write-Host "  Arguments: $arguments"
         Write-Host "  WorkingDirectory: $RepoRoot"
+        Write-Host "  Trigger: $(if ($task.Trigger -eq "daily") { "daily at $BackupAt" } else { "at logon for $user" })"
         continue
     }
 

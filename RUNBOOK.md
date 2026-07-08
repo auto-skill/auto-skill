@@ -72,13 +72,16 @@ python backfill_quality.py
 ```
 
 Install or refresh the user-level scheduled tasks so the three restart loops
-come back after host reboots:
+come back after host reboots and a daily local backup runs at `03:15`:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tasks.ps1 -StartNow
 ```
 
-To inspect before changing Task Scheduler, add `-DryRun`. To remove the tasks:
+To inspect before changing Task Scheduler, add `-DryRun`. To schedule the daily
+backup at another local time, pass `-BackupAt HH:mm`. Add `-UploadBackupR2`
+only after R2 credentials and the AWS CLI are available on the host. To remove
+the tasks:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tasks.ps1 -Unregister
@@ -199,6 +202,16 @@ If Windows blocks local scripts by execution policy, run the same command as:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\backup-local.ps1 -PackContentBlobs
 ```
+
+The Windows scheduled-task installer registers `AutoSkill-Backup` to run the
+same local backup daily:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tasks.ps1 -BackupAt 03:15
+```
+
+`deploy\diagnose-host.ps1` warns when no backup manifest exists or the newest
+manifest under `data\backups\` is older than 30 hours.
 
 To prepare deduped compressed content blobs for R2:
 

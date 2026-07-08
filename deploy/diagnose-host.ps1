@@ -3,7 +3,8 @@ param(
     [string]$McpHealthUrl = "https://mcp.avalahome.com/healthz",
     [string]$LocalApiUrl = "http://127.0.0.1:8000",
     [string]$LocalMcpHealthUrl = "http://127.0.0.1:8765/healthz",
-    [string]$TaskPrefix = "AutoSkill"
+    [string]$TaskPrefix = "AutoSkill",
+    [int]$MaxBackupAgeHours = 30
 )
 
 $ErrorActionPreference = "Continue"
@@ -104,12 +105,32 @@ if ($cloudflaredProcesses) {
     Fail "cloudflared process" "not running; public Cloudflare Tunnel will return 1033/HTTP 530"
 }
 
-foreach ($taskName in @("$TaskPrefix-API", "$TaskPrefix-MCP", "$TaskPrefix-Tunnel")) {
+foreach ($taskName in @("$TaskPrefix-API", "$TaskPrefix-MCP", "$TaskPrefix-Tunnel", "$TaskPrefix-Backup")) {
     try {
         $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
         Pass "scheduled task $taskName" "state=$($task.State)"
     } catch {
         Warn "scheduled task $taskName" "not installed; run deploy\install-windows-tasks.ps1 on the host"
+    }
+}
+
+$backupRoot = Join-Path $RepoRoot "data\backups"
+if (-not (Test-Path -LiteralPath $backupRoot)) {
+    Warn "backup freshness" "backup directory missing: $backupRoot"
+} else {
+    $latestManifest = Get-ChildItem -LiteralPath $backupRoot -Recurse -Filter manifest.json -File |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    if (-not $latestManifest) {
+        Warn "backup freshness" "no manifest.json found under $backupRoot"
+    } else {
+        $ageHours = ((Get-Date).ToUniversalTime() - $latestManifest.LastWriteTimeUtc).TotalHours
+        $detail = "latest=$($latestManifest.FullName), age_hours=$([math]::Round($ageHours, 1))"
+        if ($ageHours -gt $MaxBackupAgeHours) {
+            Warn "backup freshness" "$detail, max_hours=$MaxBackupAgeHours"
+        } else {
+            Pass "backup freshness" $detail
+        }
     }
 }
 
