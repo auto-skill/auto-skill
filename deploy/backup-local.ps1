@@ -17,6 +17,9 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$R2Prefix = "alpha-host-backups",
 
+    [Parameter(Mandatory = $false)]
+    [int]$RetentionDays = 14,
+
     [switch]$SkipLibrary,
     [switch]$PackContentBlobs,
     [switch]$UploadR2
@@ -55,6 +58,49 @@ function Invoke-Native {
     if ($LASTEXITCODE -ne 0) {
         throw "$Label failed with exit code $LASTEXITCODE"
     }
+}
+
+function Remove-ExpiredBackups {
+    param(
+        [string]$RootDir,
+        [string]$CurrentBackupDir,
+        [int]$Days
+    )
+
+    if ($Days -le 0) {
+        Write-Host "Backup retention pruning disabled."
+        return
+    }
+    if (-not (Test-Path -LiteralPath $RootDir)) {
+        return
+    }
+
+    $rootItem = Get-Item -LiteralPath $RootDir
+    $currentItem = Get-Item -LiteralPath $CurrentBackupDir
+    $cutoff = (Get-Date).ToUniversalTime().AddDays(-$Days)
+    $timestampPattern = "^\d{8}T\d{6}Z$"
+
+    $expired = @()
+    foreach ($dir in Get-ChildItem -LiteralPath $rootItem.FullName -Directory) {
+        if ($dir.Name -notmatch $timestampPattern) {
+            continue
+        }
+        if ($dir.FullName -eq $currentItem.FullName) {
+            continue
+        }
+        if ($dir.Parent.FullName -ne $rootItem.FullName) {
+            throw "Refusing to prune backup outside root: $($dir.FullName)"
+        }
+        if ($dir.LastWriteTimeUtc -lt $cutoff) {
+            $expired += $dir
+        }
+    }
+
+    foreach ($dir in $expired) {
+        Write-Host "Pruning expired backup $($dir.FullName)"
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+    }
+    Write-Host "Backup retention: kept backups from the last $Days day(s); pruned $($expired.Count)."
 }
 
 if (-not (Test-Path -LiteralPath $DbPath)) {
@@ -123,6 +169,8 @@ if ($UploadR2) {
         aws --endpoint-url $R2Endpoint s3 sync $backupDir "s3://$R2Bucket/$R2Prefix/$stamp/"
     }
 }
+
+Remove-ExpiredBackups -RootDir $OutputDir -CurrentBackupDir $backupDir -Days $RetentionDays
 
 Write-Host "Backup written to $backupDir"
 Write-Host "Manifest: $manifestPath"

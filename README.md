@@ -106,7 +106,8 @@ directory needs its own backup until content is moved into SQLite.
 
 On the current Windows host, run `.\deploy\backup-local.ps1 -PackContentBlobs`
 before deploys to create a timestamped SQLite/library/blob backup under
-`data\backups\`. Add `-UploadR2` when R2 credentials are available. Use
+`data\backups\`; timestamped local backups are pruned after 14 days by
+default. Add `-UploadR2` when R2 credentials are available. Use
 `.\deploy\install-windows-tasks.ps1` to keep the service loops and daily local
 backup registered in Task Scheduler.
 

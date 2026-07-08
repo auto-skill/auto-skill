@@ -79,9 +79,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tas
 ```
 
 To inspect before changing Task Scheduler, add `-DryRun`. To schedule the daily
-backup at another local time, pass `-BackupAt HH:mm`. Add `-UploadBackupR2`
-only after R2 credentials and the AWS CLI are available on the host. To remove
-the tasks:
+backup at another local time, pass `-BackupAt HH:mm`. Local backup retention
+defaults to 14 days; change it with `-BackupRetentionDays N`. Add
+`-UploadBackupR2` only after R2 credentials and the AWS CLI are available on
+the host. To remove the tasks:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\install-windows-tasks.ps1 -Unregister
@@ -191,7 +192,9 @@ On the current Windows tunnel host, take a one-shot backup before deploys:
 
 That writes a timestamped folder under `data\backups\` containing a SQLite
 online backup, a `skills_library.tgz` archive, optional compressed content
-blobs, and `manifest.json`. To upload the same artifact to R2:
+blobs, and `manifest.json`. Timestamp-named local backup folders older than 14
+days are pruned by default; pass `-RetentionDays 0` to disable pruning for a
+manual run. To upload the same artifact to R2:
 
 ```powershell
 .\deploy\backup-local.ps1 -PackContentBlobs -UploadR2 -R2Prefix alpha-host-backups

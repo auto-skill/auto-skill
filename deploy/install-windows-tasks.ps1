@@ -1,6 +1,7 @@
 param(
     [string]$TaskPrefix = "AutoSkill",
     [string]$BackupAt = "03:15",
+    [int]$BackupRetentionDays = 14,
     [switch]$StartNow,
     [switch]$SkipBackupTask,
     [switch]$UploadBackupR2,
@@ -31,7 +32,7 @@ $Tasks = @(
 
 $backupScript = Join-Path $RepoRoot "deploy\backup-local.ps1"
 if (-not $SkipBackupTask) {
-    $backupArgs = @("-PackContentBlobs")
+    $backupArgs = @("-PackContentBlobs", "-RetentionDays", "$BackupRetentionDays")
     if ($UploadBackupR2) {
         $backupArgs += "-UploadR2"
     }
