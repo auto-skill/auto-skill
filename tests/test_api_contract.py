@@ -147,6 +147,22 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("validate sheet names", body["content"])
         self.assertTrue(body["content_url"].startswith("/content/"))
         self.assertEqual(body["score_debug"]["quality_status"], "active")
+        metrics = body["score_debug"]["metrics"]
+        self.assertGreaterEqual(metrics["latency_ms"], 0)
+        self.assertGreaterEqual(metrics["retrieval_ms"], 0)
+        self.assertGreater(metrics["content_tokens"], 0)
+        self.assertGreater(metrics["response_tokens"], metrics["hint_tokens"])
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            event = conn.execute("SELECT * FROM route_events ORDER BY created_at DESC LIMIT 1").fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(event)
+        self.assertEqual(event["tier"], "full")
+        self.assertEqual(event["skill_name"], "spreadsheet-reporter")
+        self.assertGreater(event["response_tokens"], 0)
 
     def test_route_caps_platform_trap_to_hint(self) -> None:
         candidate = {
@@ -175,6 +191,43 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(body["tier"], "hint")
         self.assertIsNone(body["content"])
         self.assertTrue(body["score_debug"]["platform_mismatch"])
+        self.assertEqual(body["score_debug"]["metrics"]["content_tokens"], 0)
+
+    def test_route_metrics_summarizes_recent_events(self) -> None:
+        candidate = {
+            "id": "skill-1",
+            "name": "spreadsheet-reporter",
+            "description": "Build spreadsheet reports with formulas and charts.",
+            "source": "github_skill_file",
+            "url": "https://example.com/spreadsheet",
+            "risk_score": 0,
+            "quality_status": "metadata_only",
+            "quality_score": 55,
+            "rank": 1.0,
+            "similarity": 0.95,
+        }
+
+        async def fake_retrieve(client, query, limit):
+            del client, query, limit
+            return [candidate]
+
+        with patch("recommender.retrieve_skills", fake_retrieve):
+            response = self.client.post(
+                "/route",
+                json={
+                    "task": "create an excel report with formulas",
+                    "client": "test-client",
+                    "client_version": "0.1",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["tier"], "hint")
+
+        metrics = self.client.get("/route-metrics").json()
+        self.assertTrue(metrics["ok"])
+        self.assertGreaterEqual(metrics["total"], 1)
+        self.assertGreaterEqual(metrics["tiers"]["hint"], 1)
+        self.assertGreaterEqual(metrics["avg_response_tokens"], 1)
 
 
 if __name__ == "__main__":

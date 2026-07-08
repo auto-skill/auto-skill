@@ -77,11 +77,38 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
     error TEXT,
     new_skills_found INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS route_events (
+    id TEXT PRIMARY KEY,
+    created_at TEXT,
+    client TEXT,
+    client_version TEXT,
+    query_hash TEXT,
+    query_chars INTEGER,
+    tier TEXT,
+    skill_id TEXT,
+    skill_name TEXT,
+    skill_url TEXT,
+    latency_ms INTEGER,
+    retrieval_ms INTEGER,
+    content_ms INTEGER,
+    result_count INTEGER,
+    input_tokens INTEGER,
+    hint_tokens INTEGER,
+    content_tokens INTEGER,
+    response_tokens INTEGER,
+    config_version TEXT,
+    warnings TEXT DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS route_events_created_at_idx ON route_events(created_at);
+CREATE INDEX IF NOT EXISTS route_events_tier_idx ON route_events(tier);
 """
 
 TABLES = {
     "skills": {"unique": "url", "json_cols": {"tags", "raw", "risk_flags", "quality_reasons", "platforms"}},
     "scrape_runs": {"unique": None, "json_cols": set()},
+    "route_events": {"unique": None, "json_cols": {"warnings"}},
 }
 
 SKILL_COLUMN_DEFAULTS = {
@@ -290,6 +317,90 @@ def delete_rows(table: str, filters: dict) -> int:
         cur = conn.execute(sql, params)
         conn.commit()
         return cur.rowcount
+    finally:
+        conn.close()
+
+
+def insert_route_event(event: dict) -> None:
+    """Best-effort append-only analytics for route latency and token churn."""
+    conn = get_conn()
+    try:
+        row = dict(event)
+        row.setdefault("id", str(uuid.uuid4()))
+        row.setdefault("created_at", _now())
+        if not isinstance(row.get("warnings"), str):
+            row["warnings"] = json.dumps(row.get("warnings") or [])
+        cols = list(row.keys())
+        placeholders = ",".join("?" for _ in cols)
+        conn.execute(
+            f"INSERT INTO route_events ({','.join(cols)}) VALUES ({placeholders})",
+            [row[col] for col in cols],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def route_event_summary(hours: int = 24) -> dict:
+    """Aggregate recent route events for local ops/product checks."""
+    conn = get_conn()
+    try:
+        cutoff = time.time() - (max(1, hours) * 3600)
+        cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+        total = conn.execute("SELECT COUNT(*) FROM route_events WHERE created_at >= ?", (cutoff_iso,)).fetchone()[0]
+        tiers = {
+            row["tier"]: row["count"]
+            for row in conn.execute(
+                "SELECT tier, COUNT(*) AS count FROM route_events "
+                "WHERE created_at >= ? GROUP BY tier",
+                (cutoff_iso,),
+            ).fetchall()
+        }
+        row = conn.execute(
+            """
+            SELECT
+              AVG(latency_ms) AS avg_latency_ms,
+              AVG(retrieval_ms) AS avg_retrieval_ms,
+              AVG(content_ms) AS avg_content_ms,
+              AVG(response_tokens) AS avg_response_tokens,
+              MAX(latency_ms) AS max_latency_ms,
+              MAX(response_tokens) AS max_response_tokens
+            FROM route_events
+            WHERE created_at >= ?
+            """,
+            (cutoff_iso,),
+        ).fetchone()
+        slowest = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT created_at, client, tier, skill_name, latency_ms, retrieval_ms,
+                       content_ms, response_tokens, warnings
+                FROM route_events
+                WHERE created_at >= ?
+                ORDER BY latency_ms DESC
+                LIMIT 5
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+        ]
+        for event in slowest:
+            try:
+                event["warnings"] = json.loads(event.get("warnings") or "[]")
+            except Exception:
+                event["warnings"] = []
+        return {
+            "window_hours": hours,
+            "total": total,
+            "tiers": tiers,
+            "avg_latency_ms": int(row["avg_latency_ms"] or 0),
+            "avg_retrieval_ms": int(row["avg_retrieval_ms"] or 0),
+            "avg_content_ms": int(row["avg_content_ms"] or 0),
+            "avg_response_tokens": int(row["avg_response_tokens"] or 0),
+            "max_latency_ms": int(row["max_latency_ms"] or 0),
+            "max_response_tokens": int(row["max_response_tokens"] or 0),
+            "slowest": slowest,
+        }
     finally:
         conn.close()
 

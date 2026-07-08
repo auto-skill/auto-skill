@@ -16,6 +16,8 @@
      charts` returns `full` or `hint`.
    - `POST /route` for `build a landing page for an AI automation agency` does
      not full-route to a Landingi-specific skill.
+   - Route `score_debug.metrics.latency_ms` is under the launch budget and
+     `score_debug.metrics.response_tokens` is not churning excessive context.
 6. Confirm public forwarded requests cannot reach write endpoints:
    `/scrape`, `/rescan`, `/normalize-db`, and mutating `/rest/v1/*` should be
    blocked by the read-only guard when forwarded through Cloudflare.
@@ -73,6 +75,12 @@ Finally prove the public service is serving the new code:
 
 ```powershell
 python launch_check.py --base-url https://skills.avalahome.com --skip-env --skip-docker
+```
+
+Inspect route analytics locally on the host:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/route-metrics | ConvertTo-Json -Depth 5
 ```
 
 `deploy\update-host.ps1` can also run the optional maintenance steps:
@@ -172,7 +180,9 @@ python cleanup_scrape_runs.py --apply
 - Existing legacy rows need `backfill_quality.py` before quality metrics are
   trustworthy.
 - The brute-force NumPy vector cache remains. Quality backfill should shrink
-  the active set first; sqlite-vec is a later measured migration, not a P0.
+  the active set first. Use `/route-metrics`, `eval_search.py`, and
+  `launch_check.py` latency budgets before migrating to sqlite-vec, libSQL, or
+  a hosted vector service.
 - `skills_library/` should eventually move into SQLite content rows so one
   Litestream backup covers all runtime state. For alpha, daily R2 tarballs are
   acceptable and easier to operate.

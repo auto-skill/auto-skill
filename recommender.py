@@ -16,11 +16,13 @@ Also runs a background loop that embeds any skills rows missing embeddings,
 so freshly scraped skills become semantically searchable within minutes.
 """
 import asyncio
+import hashlib
 import json
 import os
 import re
 import time
 from datetime import datetime, timezone
+from math import ceil
 
 import httpx
 from fastapi import APIRouter, Response
@@ -28,6 +30,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from embeddings import LibraryContent, build_embed_text, embed_text_hash, embed_texts
+import local_store as store
 from quality import CONFIG_VERSION, content_hash, rerank_candidates, tier_for_prompt
 
 # Storage moved local 2026-07-05 -- recommender.py always runs embedded inside
@@ -49,6 +52,8 @@ AUTO_START_EMBEDDER = os.getenv("AUTO_START_EMBEDDER", "1").lower() not in {"0",
 RECOMMEND_GAP = 1.6
 ROUTE_TTL_SECONDS = int(os.getenv("ROUTE_TTL_SECONDS", "300"))
 MAX_INLINE_CONTENT_CHARS = int(os.getenv("MAX_INLINE_CONTENT_CHARS", "12000"))
+ROUTE_LATENCY_WARN_MS = int(os.getenv("ROUTE_LATENCY_WARN_MS", "1500"))
+ROUTE_RESPONSE_TOKEN_WARN = int(os.getenv("ROUTE_RESPONSE_TOKEN_WARN", "3500"))
 CONTENT_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 EMBED_INTERVAL_SECONDS = int(os.getenv("EMBED_INTERVAL_SECONDS", "300"))
 EMBED_PAGE_SIZE = 500
@@ -517,6 +522,28 @@ def _score_debug(results: list[dict], tier: str) -> dict:
     }
 
 
+def _estimate_tokens(value) -> int:
+    """Cheap, deterministic token estimate for budgets and trend tracking."""
+    if value is None:
+        return 0
+    if not isinstance(value, str):
+        value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if not value:
+        return 0
+    return max(1, ceil(len(value) / 4))
+
+
+def _query_hash(query: str) -> str:
+    return hashlib.sha256(query.strip().lower().encode("utf-8")).hexdigest()
+
+
+async def _record_route_event(event: dict) -> None:
+    try:
+        await asyncio.to_thread(store.insert_route_event, event)
+    except Exception as exc:
+        print(f"[recommender] route event logging failed: {exc}")
+
+
 def _library_content_by_hash(target_hash: str) -> str:
     if not target_hash or not CONTENT_HASH_RE.match(target_hash):
         return ""
@@ -538,21 +565,37 @@ async def get_content(hash_value: str):
 @router.post("/route")
 async def route(body: RouteRequest):
     """Deterministic backend-owned route contract for connectors."""
+    start = time.monotonic()
     query = (body.task or body.prompt or "").strip()
     if not query:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        metrics = {
+            "latency_ms": elapsed_ms,
+            "retrieval_ms": 0,
+            "content_ms": 0,
+            "result_count": 0,
+            "input_tokens": 0,
+            "hint_tokens": 0,
+            "content_tokens": 0,
+            "response_tokens": 0,
+            "latency_warn_ms": ROUTE_LATENCY_WARN_MS,
+            "response_token_warn": ROUTE_RESPONSE_TOKEN_WARN,
+        }
         return {
             "tier": "none",
             "skill": None,
             "content": None,
             "content_url": None,
-            "score_debug": {"tier": "none", "reason": "empty-query"},
+            "score_debug": {"tier": "none", "reason": "empty-query", "metrics": metrics},
             "config_version": CONFIG_VERSION,
             "ttl": ROUTE_TTL_SECONDS,
         }
 
     limit = max(2, min(int(body.limit or 8), 20))
+    retrieval_start = time.monotonic()
     async with httpx.AsyncClient() as client:
         results = await retrieve_skills(client, query, limit)
+    retrieval_ms = int((time.monotonic() - retrieval_start) * 1000)
     results = rerank_candidates(query, results)
 
     tier = injection_tier(query, results)
@@ -560,10 +603,13 @@ async def route(body: RouteRequest):
     content = None
     content_url = None
     skill = _public_skill(results[0]) if results else None
+    content_ms = 0
 
     if tier == "full" and skill:
+        content_start = time.monotonic()
         library = LibraryContent()
         text = library.get(skill.get("url") or "")
+        content_ms = int((time.monotonic() - content_start) * 1000)
         if not text:
             tier = "hint"
             warnings.append("Matched skill has no locally stored SKILL.md content; downgraded to hint.")
@@ -580,8 +626,54 @@ async def route(body: RouteRequest):
                 content_url = f"/content/{chash}"
 
     debug = _score_debug(results, tier)
+    response_preview = {
+        "tier": tier,
+        "skill": skill,
+        "content": content,
+        "content_url": content_url,
+        "config_version": CONFIG_VERSION,
+    }
+    metrics = {
+        "latency_ms": int((time.monotonic() - start) * 1000),
+        "retrieval_ms": retrieval_ms,
+        "content_ms": content_ms,
+        "result_count": len(results),
+        "input_tokens": _estimate_tokens(query),
+        "hint_tokens": _estimate_tokens(skill),
+        "content_tokens": _estimate_tokens(content),
+        "response_tokens": _estimate_tokens(response_preview),
+        "latency_warn_ms": ROUTE_LATENCY_WARN_MS,
+        "response_token_warn": ROUTE_RESPONSE_TOKEN_WARN,
+    }
+    if metrics["latency_ms"] > ROUTE_LATENCY_WARN_MS:
+        warnings.append(f"Route latency exceeded {ROUTE_LATENCY_WARN_MS}ms budget.")
+    if metrics["response_tokens"] > ROUTE_RESPONSE_TOKEN_WARN:
+        warnings.append(f"Route response exceeded {ROUTE_RESPONSE_TOKEN_WARN} token budget.")
+    debug["metrics"] = metrics
     if warnings:
         debug["warnings"] = warnings
+    await _record_route_event(
+        {
+            "client": body.client[:80],
+            "client_version": body.client_version[:80],
+            "query_hash": _query_hash(query),
+            "query_chars": len(query),
+            "tier": tier,
+            "skill_id": skill.get("id") if skill else None,
+            "skill_name": skill.get("name") if skill else None,
+            "skill_url": skill.get("source_url") if skill else None,
+            "latency_ms": metrics["latency_ms"],
+            "retrieval_ms": retrieval_ms,
+            "content_ms": content_ms,
+            "result_count": len(results),
+            "input_tokens": metrics["input_tokens"],
+            "hint_tokens": metrics["hint_tokens"],
+            "content_tokens": metrics["content_tokens"],
+            "response_tokens": metrics["response_tokens"],
+            "config_version": CONFIG_VERSION,
+            "warnings": warnings,
+        }
+    )
     return {
         "tier": tier,
         "skill": skill,
@@ -608,7 +700,14 @@ async def find_semantic(q: str, limit: int = 8, gate: bool = True):
         return {"query": q, "results": [], "tier": tier, "gated": True,
                 "message": f"No result cleared the similarity floor ({MIN_SIMILARITY}).",
                 "score_debug": _score_debug(results, tier),
-                "config_version": CONFIG_VERSION}
+            "config_version": CONFIG_VERSION}
     return {"query": q, "results": results, "tier": tier,
             "score_debug": _score_debug(results, tier),
             "config_version": CONFIG_VERSION}
+
+
+@router.get("/route-metrics")
+async def route_metrics(hours: int = 24):
+    hours = max(1, min(int(hours or 24), 24 * 30))
+    summary = await asyncio.to_thread(store.route_event_summary, hours)
+    return {"ok": True, **summary, "config_version": CONFIG_VERSION}

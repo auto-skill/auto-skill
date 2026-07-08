@@ -21,6 +21,7 @@ Useful endpoints:
   `config_version`.
 - `POST /route {"task":"..."}` - backend-owned full/hint/none route contract.
 - `GET /content/{content_hash}` - immutable cached SKILL.md content when known.
+- `GET /route-metrics` - local-only route latency/token analytics summary.
 
 ## Quality Gate
 
@@ -53,6 +54,19 @@ landing-page prompt full-routing to a Landingi support skill.
 
 Ollama chat selection is disabled by default. Set `ENABLE_OLLAMA_CHAT=1` only
 for local experiments; production `/route` does not depend on an LLM.
+
+Route responses include `score_debug.metrics` with cheap latency and token
+estimates:
+
+- `latency_ms`, `retrieval_ms`, and `content_ms` track skill-find time.
+- `input_tokens`, `hint_tokens`, `content_tokens`, and `response_tokens` track
+  token churn.
+- Defaults warn above 1500 ms or 3500 response tokens.
+
+Each `/route` call also appends a privacy-safe `route_events` row keyed by a
+query hash, not raw prompt text. Use `GET /route-metrics` locally to inspect
+recent tier distribution, slow routes, and average response token size. The
+public read-only guard intentionally does not allow `/route-metrics`.
 
 ## Deploy Skeleton
 

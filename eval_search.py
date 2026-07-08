@@ -14,6 +14,7 @@ sibling auto-skill-connector repo and can't silently regress unnoticed here.
 Run:  python eval_search.py
 """
 import asyncio
+import os
 import re
 
 import httpx
@@ -121,6 +122,14 @@ CONTENT_GATE_CASES = [
 ]
 
 TOP_K = 3
+ROUTE_LATENCY_BUDGET_MS = int(os.getenv("ROUTE_LATENCY_BUDGET_MS", "1500"))
+ROUTE_RESPONSE_TOKEN_BUDGET = int(os.getenv("ROUTE_RESPONSE_TOKEN_BUDGET", "3500"))
+
+ROUTE_CASES = [
+    ("spreadsheet full route", "create an excel spreadsheet report with formulas and charts", {"full", "hint"}),
+    ("landing page platform trap", "build a landing page for an AI automation agency", {"hint", "none", "full"}),
+    ("acknowledgement/meta prompt", "ok sounds good lets do it", {"none", "hint"}),
+]
 
 
 def is_hit(result: dict, accepts: list[str]) -> bool:
@@ -216,6 +225,43 @@ async def main():
         gate_ok += ok
         print(f"  content-gate {'OK ' if ok else 'FAIL'}  {label}  (bad={is_bad}, expected={expect_bad})")
     print(f"content-quality gates: {gate_ok}/{len(CONTENT_GATE_CASES)} passed")
+
+    # Route contract benchmark: keep correctness, latency, and token churn in
+    # one report so routing changes cannot improve relevance while silently
+    # becoming too slow or too expensive to inject.
+    route_ok = 0
+    async with httpx.AsyncClient() as client:
+        for label, query, allowed_tiers in ROUTE_CASES:
+            r = await client.post(
+                f"{SUPABASE_URL}/route",
+                json={"task": query, "client": "eval_search", "client_version": "local"},
+                timeout=45,
+            )
+            body = r.json() if r.status_code == 200 else {}
+            tier = body.get("tier", "none")
+            skill = body.get("skill") or {}
+            skill_blob = f"{skill.get('name', '')} {skill.get('url', '')} {skill.get('source_url', '')}".lower()
+            metrics = ((body.get("score_debug") or {}).get("metrics") or {})
+            latency_ms = int(metrics.get("latency_ms") or 0)
+            response_tokens = int(metrics.get("response_tokens") or 0)
+            ok = (
+                r.status_code == 200
+                and tier in allowed_tiers
+                and not (label == "landing page platform trap" and tier == "full" and "landingi" in skill_blob)
+                and latency_ms <= ROUTE_LATENCY_BUDGET_MS
+                and response_tokens <= ROUTE_RESPONSE_TOKEN_BUDGET
+            )
+            route_ok += ok
+            print(
+                "  route-bench "
+                f"{'OK ' if ok else 'FAIL'} {label}: tier={tier}, "
+                f"latency_ms={latency_ms}, response_tokens={response_tokens}"
+            )
+    print(
+        f"route benchmark: {route_ok}/{len(ROUTE_CASES)} passed "
+        f"(latency_budget_ms={ROUTE_LATENCY_BUDGET_MS}, "
+        f"response_token_budget={ROUTE_RESPONSE_TOKEN_BUDGET})"
+    )
 
 
 if __name__ == "__main__":

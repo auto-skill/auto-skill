@@ -180,7 +180,39 @@ def check_library(reporter: Reporter, library_dir: Path) -> None:
         reporter.pass_("library", f"index_entries={len(index)}, markdown_files={file_count}")
 
 
-def check_http(reporter: Reporter, base_url: str, direct_task: str, trap_task: str) -> None:
+def _route_metrics(body: dict) -> dict:
+    return ((body.get("score_debug") or {}).get("metrics") or {})
+
+
+def _check_route_budget(
+    reporter: Reporter,
+    name: str,
+    body: dict,
+    max_latency_ms: int,
+    max_response_tokens: int,
+) -> None:
+    metrics = _route_metrics(body)
+    if not metrics:
+        reporter.fail(name, "route response did not include score_debug.metrics")
+        return
+    latency_ms = int(metrics.get("latency_ms") or 0)
+    response_tokens = int(metrics.get("response_tokens") or 0)
+    if latency_ms > max_latency_ms:
+        reporter.fail(name, f"latency_ms={latency_ms} exceeded budget {max_latency_ms}")
+    elif response_tokens > max_response_tokens:
+        reporter.fail(name, f"response_tokens={response_tokens} exceeded budget {max_response_tokens}")
+    else:
+        reporter.pass_(name, f"latency_ms={latency_ms}, response_tokens={response_tokens}")
+
+
+def check_http(
+    reporter: Reporter,
+    base_url: str,
+    direct_task: str,
+    trap_task: str,
+    max_route_latency_ms: int,
+    max_route_response_tokens: int,
+) -> None:
     try:
         status, body = _json_request(base_url, "GET", "/healthz")
     except Exception as exc:
@@ -219,6 +251,13 @@ def check_http(reporter: Reporter, base_url: str, direct_task: str, trap_task: s
     if status == 200 and body.get("tier") in {"full", "hint"} and body.get("skill"):
         skill = body.get("skill") or {}
         reporter.pass_("route direct", f"tier={body.get('tier')}, skill={skill.get('name') or skill.get('slug')}")
+        _check_route_budget(
+            reporter,
+            "route direct budget",
+            body,
+            max_route_latency_ms,
+            max_route_response_tokens,
+        )
     else:
         reporter.fail("route direct", f"status={status}, body={json.dumps(body, sort_keys=True)[:500]}")
 
@@ -231,6 +270,13 @@ def check_http(reporter: Reporter, base_url: str, direct_task: str, trap_task: s
         reporter.fail("route trap", "generic landing-page prompt full-routed to Landingi")
     else:
         reporter.pass_("route trap", f"tier={body.get('tier')}, skill={skill.get('name') or skill.get('slug')}")
+        _check_route_budget(
+            reporter,
+            "route trap budget",
+            body,
+            max_route_latency_ms,
+            max_route_response_tokens,
+        )
 
     status, body = _json_request(
         base_url,
@@ -269,6 +315,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-total", type=int, default=1)
     parser.add_argument("--min-active", type=int, default=1)
     parser.add_argument("--min-embedded", type=int, default=1)
+    parser.add_argument("--max-route-latency-ms", type=int, default=1500)
+    parser.add_argument("--max-route-response-tokens", type=int, default=3500)
     parser.add_argument("--skip-env", action="store_true")
     parser.add_argument("--skip-local", action="store_true")
     parser.add_argument("--skip-http", action="store_true")
@@ -286,7 +334,14 @@ def main() -> int:
         check_db(reporter, args.db_path, args.min_total, args.min_active, args.min_embedded)
         check_library(reporter, args.library_dir)
     if not args.skip_http:
-        check_http(reporter, args.base_url, args.direct_task, args.trap_task)
+        check_http(
+            reporter,
+            args.base_url,
+            args.direct_task,
+            args.trap_task,
+            args.max_route_latency_ms,
+            args.max_route_response_tokens,
+        )
     if not args.skip_docker:
         check_docker(reporter, args.env_file)
 
