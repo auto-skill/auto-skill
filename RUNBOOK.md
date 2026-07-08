@@ -61,12 +61,13 @@ On the host:
 ```powershell
 .\deploy\backup-local.ps1 -PackContentBlobs
 git pull --ff-only origin main
-.\deploy\update-host.ps1 -SkipPull -SkipLaunchCheck
+.\deploy\update-host.ps1 -SkipPull -RestartTasks
 ```
 
-Then restart the API/scraper supervisor so `python scraper.py` reloads the new
-code. If legacy rows have not been quality-gated yet, run the backfill while the
-API is stopped or quiet:
+`-RestartTasks` restarts `AutoSkill-API`, `AutoSkill-MCP`, and
+`AutoSkill-Tunnel` after tests and maintenance steps, then runs the public
+launch check. If legacy rows have not been quality-gated yet, run the backfill
+while the API is stopped or quiet:
 
 ```powershell
 python backfill_quality.py

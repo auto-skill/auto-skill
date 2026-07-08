@@ -9,6 +9,9 @@ param(
     [switch]$RunBackfill,
     [switch]$RunReindex,
     [switch]$ApplyScrapeCleanup,
+    [switch]$RestartTasks,
+    [string]$TaskPrefix = "AutoSkill",
+    [int]$RestartWaitSeconds = 10,
     [switch]$SkipLaunchCheck
 )
 
@@ -40,6 +43,21 @@ function Assert-CleanTree {
     if ($dirty) {
         throw "Working tree has uncommitted changes. Commit/stash them, or pass -AllowDirty after reviewing them."
     }
+}
+
+function Restart-HostTask {
+    param([string]$TaskName)
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task) {
+        throw "Scheduled task '$TaskName' is not installed. Run deploy\install-windows-tasks.ps1 -StartNow first."
+    }
+    if ($task.State -eq "Running") {
+        Write-Host "Stopping $TaskName"
+        Stop-ScheduledTask -TaskName $TaskName
+    }
+    Write-Host "Starting $TaskName"
+    Start-ScheduledTask -TaskName $TaskName
 }
 
 Write-Host "Auto-Skill host update"
@@ -110,11 +128,24 @@ if ($RunReindex) {
     Write-Host "Skipping embedding reindex. Run with -RunReindex after the localhost API is running if active rows need refreshed embeddings."
 }
 
-Write-Host ""
-Write-Host "Restart the host supervisors now if they are still running old Python processes:"
-Write-Host "  - API/scraper: start_scraper.ps1 (python scraper.py on localhost:8000)"
-Write-Host "  - Connector HTTP: start_connector_http.ps1"
-Write-Host "  - Cloudflare tunnel: start_cloudflared.ps1, only if the tunnel process changed"
+if ($RestartTasks) {
+    Write-Host ""
+    Write-Host "Restarting host scheduled tasks..."
+    foreach ($taskName in @("$TaskPrefix-API", "$TaskPrefix-MCP", "$TaskPrefix-Tunnel")) {
+        Restart-HostTask $taskName
+    }
+    if ($RestartWaitSeconds -gt 0) {
+        Write-Host "Waiting $RestartWaitSeconds second(s) for restarted services to bind..."
+        Start-Sleep -Seconds $RestartWaitSeconds
+    }
+} else {
+    Write-Host ""
+    Write-Host "Restart the host supervisors now if they are still running old Python processes:"
+    Write-Host "  - API/scraper: start_scraper.ps1 (python scraper.py on localhost:8000)"
+    Write-Host "  - Connector HTTP: start_connector_http.ps1"
+    Write-Host "  - Cloudflare tunnel: start_cloudflared.ps1, only if the tunnel process changed"
+    Write-Host "Or rerun this script with -RestartTasks after installing scheduled tasks."
+}
 
 if (-not $SkipLaunchCheck) {
     Invoke-Native "public launch preflight" {
