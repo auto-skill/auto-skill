@@ -26,6 +26,9 @@ jobs:
       - name: Validate route benchmark cases
         run: python eval_search.py --validate-route-cases
 
+      - name: Run compose launch preflight
+        run: python deploy/compose_preflight.py --env-file deploy/.env.ci --skip-seed-checks
+
       - name: Compile Python sources
         run: python -m compileall -q -x '(\.git|__pycache__|\.venv|venv|data|skills_library|content_blobs|eval-results)' .
 
@@ -94,6 +97,3 @@ jobs:
           if (-not (Test-Path -LiteralPath (Join-Path $restoreLibrary "files/demo.md"))) {
             throw "restored library markdown missing"
           }
-
-      - name: Validate docker compose
-        run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.yml config
