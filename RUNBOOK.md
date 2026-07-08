@@ -26,8 +26,8 @@
 6. Confirm public forwarded requests cannot reach admin or write endpoints:
    `/chat`, `/scrape`, `/seed-backlog`, `/rescan`, `/normalize-db`,
    `/normalize-db/progress`, `/route-metrics`, `/route-feedback`, and mutating
-   `/rest/v1/*` should be blocked by the read-only guard when forwarded
-   through Cloudflare.
+   or read/RPC `/rest/v1/*` should be blocked by the read-only guard when
+   forwarded through Cloudflare.
 7. Run the launch preflight:
 
 ```powershell

@@ -42,9 +42,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # on this machine and proxies to loopback), tunneled requests carry forwarding
 # headers while genuinely local callers (scraper itself, recommender, hook,
 # mcp_server) do not. Public callers get search/read endpoints only -- the
-# local REST surface has no auth, so every write path must stay loopback-only.
-PUBLIC_GET_PATHS = {"/", "/healthz", "/readyz", "/status", "/find-semantic", "/skills", "/library", "/rest/v1/skills"}
-PUBLIC_POST_RE = re.compile(r"^(/route|/rest/v1/rpc/(search_skills|vector_search_skills|hybrid_search_skills))$")
+# local REST surface has no auth, so every /rest/v1 path must stay loopback-only.
+PUBLIC_GET_PATHS = {"/", "/healthz", "/readyz", "/status", "/find-semantic", "/skills", "/library"}
+PUBLIC_POST_RE = re.compile(r"^/route$")
 
 
 @app.middleware("http")

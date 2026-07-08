@@ -29,6 +29,11 @@ Legacy `/chat` recommender endpoints are local-only experiments. The public
 launch route contract is `POST /route`, which is deterministic and reports
 latency/token metrics.
 
+The Supabase-shaped `/rest/v1/*` compatibility surface is also local-only. It
+exists so the scraper, worker, and recommender can share the SQLite store over
+loopback; public clients should use `/route`, `/find-semantic`, and
+`/content/{content_hash}`.
+
 `/readyz` and `/route-metrics` include `vector_index` stats so search latency
 can be correlated with active corpus size, valid embeddings, and embedding
 matrix cache state before moving to a new vector backend. `/readyz` also
