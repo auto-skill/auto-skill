@@ -57,6 +57,7 @@ To track retrieval quality, route latency, and token churn across changes:
 
 ```powershell
 python eval_search.py --json-out eval-results/latest.json
+python eval_compare.py eval-results/before.json eval-results/latest.json
 ```
 
 ## Routing Policy

@@ -119,6 +119,7 @@ Archive internal eval snapshots before and after routing changes:
 
 ```powershell
 python eval_search.py --json-out eval-results\$(Get-Date -Format yyyyMMdd-HHmmss).json
+python eval_compare.py --fail-on-regression eval-results\before.json eval-results\after.json
 ```
 
 Route outcome feedback is also local-only:
