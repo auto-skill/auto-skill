@@ -4,10 +4,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from eval_search import _evaluate_route_case, _load_route_cases
+from eval_search import DEFAULT_ROUTE_CASES_PATH, _evaluate_route_case, _load_route_cases
 
 
 class EvalSearchRouteCaseTests(unittest.TestCase):
+    def test_default_route_cases_load(self) -> None:
+        cases = _load_route_cases(DEFAULT_ROUTE_CASES_PATH)
+        case_ids = {case["id"] for case in cases}
+        platform_traps = [case for case in cases if "platform-trap" in case["tags"]]
+
+        self.assertIn("trap-landingi-001", case_ids)
+        self.assertGreaterEqual(len(platform_traps), 5)
+
     def test_load_route_cases_accepts_pipe_tiers_and_jsonl_comments(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "routes.jsonl"

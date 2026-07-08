@@ -1,6 +1,6 @@
 import unittest
 
-from quality import evaluate_quality, rerank_candidates, tier_for_prompt
+from quality import PLATFORM_ALIASES, evaluate_quality, rerank_candidates, tier_for_prompt
 
 
 VALID_CONTENT = """---
@@ -98,6 +98,53 @@ class RoutingTierTests(unittest.TestCase):
         }
 
         self.assertEqual(tier_for_prompt(prompt, [candidate]), "full")
+
+    def test_platform_traps_cap_all_known_platforms_to_hint(self):
+        generic_prompt = "build a customer dashboard and publish it"
+        for platform in sorted(PLATFORM_ALIASES):
+            with self.subTest(platform=platform):
+                candidate = {
+                    "name": f"{platform}-workflow",
+                    "description": (
+                        f"{platform} platform help for customer dashboards, publishing, "
+                        "API keys, webhooks, and sync issues."
+                    ),
+                    "tags": [platform, "dashboard"],
+                    "platforms": [platform],
+                    "quality_status": "active",
+                    "quality_score": 90,
+                    "rank": 1.0,
+                    "similarity": 0.95,
+                }
+
+                ranked = rerank_candidates(generic_prompt, [candidate])
+
+                self.assertTrue(ranked[0]["platform_mismatch"])
+                self.assertEqual(tier_for_prompt(generic_prompt, [candidate]), "hint")
+
+    def test_platform_explicit_prompts_allow_known_platforms(self):
+        for platform, aliases in sorted(PLATFORM_ALIASES.items()):
+            with self.subTest(platform=platform):
+                alias = aliases[0]
+                prompt = f"build a {alias} customer dashboard and publish it"
+                candidate = {
+                    "name": f"{platform}-workflow",
+                    "description": (
+                        f"{alias} platform help for customer dashboards, publishing, "
+                        "API keys, webhooks, and sync issues."
+                    ),
+                    "tags": [platform, "dashboard"],
+                    "platforms": [platform],
+                    "quality_status": "active",
+                    "quality_score": 90,
+                    "rank": 1.0,
+                    "similarity": 0.95,
+                }
+
+                ranked = rerank_candidates(prompt, [candidate])
+
+                self.assertFalse(ranked[0]["platform_mismatch"])
+                self.assertEqual(tier_for_prompt(prompt, [candidate]), "full")
 
     def test_metadata_only_never_full_routes(self):
         prompt = "send slack messages from my agent"
