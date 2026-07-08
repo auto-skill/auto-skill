@@ -40,6 +40,9 @@ matrix cache state before moving to a new vector backend. `/readyz` also
 includes `scraper.running_recent`, `scraper.running_stale`,
 `scraper.last_success_at`, and recent run rows so launch checks can catch
 duplicate or stale scraper processes.
+The in-process vector matrix cache is invalidated immediately on `skills`
+writes, updates, and deletes, so freshly embedded rows do not wait for the TTL
+before becoming searchable.
 
 ## Quality Gate
 

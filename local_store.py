@@ -258,6 +258,8 @@ def upsert_rows(table: str, rows: list[dict], on_conflict: str | None) -> list[d
                 r = cur.execute(f"SELECT * FROM {table} WHERE id=?", (row["id"],)).fetchone()
             out.append(_row_to_dict(r, table, None))
         conn.commit()
+        if table == "skills":
+            invalidate_vector_cache()
         return out
     finally:
         conn.close()
@@ -348,6 +350,8 @@ def update_rows(table: str, filters: dict, data: dict) -> int:
         sql = f"UPDATE {table} SET {set_clause} WHERE {' AND '.join(where_sql)}"
         cur = conn.execute(sql, list(data.values()) + params)
         conn.commit()
+        if table == "skills" and cur.rowcount:
+            invalidate_vector_cache()
         return cur.rowcount
     finally:
         conn.close()
@@ -364,6 +368,8 @@ def delete_rows(table: str, filters: dict) -> int:
         sql = f"DELETE FROM {table} WHERE {' AND '.join(where_sql)}"
         cur = conn.execute(sql, params)
         conn.commit()
+        if table == "skills" and cur.rowcount:
+            invalidate_vector_cache()
         return cur.rowcount
     finally:
         conn.close()
@@ -706,6 +712,11 @@ _EMB_DIM = 384
 _EMB_BLOB_LEN = _EMB_DIM * 4
 _EMB_CACHE_TTL_SECONDS = 60.0
 _emb_cache: dict = {"at": 0.0, "ids": [], "mat": None}
+
+
+def invalidate_vector_cache() -> None:
+    """Clear the in-process vector matrix after skills writes."""
+    _emb_cache.update(at=0.0, ids=[], mat=None)
 
 
 def vector_index_stats() -> dict:

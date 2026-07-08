@@ -70,9 +70,11 @@ class ApiContractTests(unittest.TestCase):
         local_store.DB_PATH = self.db_path
         scraper.store.DB_PATH = self.db_path
         local_store.init_db()
+        local_store.invalidate_vector_cache()
         self.client = TestClient(scraper.app)
 
     def tearDown(self) -> None:
+        local_store.invalidate_vector_cache()
         local_store.DB_PATH = self.old_db_path
         scraper.store.DB_PATH = self.old_db_path
 
@@ -262,6 +264,42 @@ class ApiContractTests(unittest.TestCase):
 
         third = self.client.post("/rest/v1/scrape_runs", json={"id": "run-3", "status": "running"})
         self.assertEqual(third.status_code, 200)
+
+    def test_skills_writes_invalidate_vector_cache(self) -> None:
+        first = {
+            "id": "skill-1",
+            "name": "spreadsheet-reporter",
+            "description": "Build spreadsheet reports with formulas and charts.",
+            "source": "test",
+            "url": "https://example.com/spreadsheet",
+            "risk_score": 0,
+            "quality_status": "active",
+            "embedding": [1.0] + [0.0] * 383,
+        }
+        second = {
+            "id": "skill-2",
+            "name": "browser-qa",
+            "description": "Test browser interfaces and capture screenshots.",
+            "source": "test",
+            "url": "https://example.com/browser",
+            "risk_score": 0,
+            "quality_status": "active",
+            "embedding": [0.0, 1.0] + [0.0] * 382,
+        }
+
+        self.client.post("/rest/v1/skills?on_conflict=url", json=first)
+        initial = self.client.post(
+            "/rest/v1/rpc/vector_search_skills",
+            json={"query_embedding": [1.0] + [0.0] * 383, "match_count": 5},
+        )
+        self.assertEqual([row["id"] for row in initial.json()], ["skill-1"])
+
+        self.client.post("/rest/v1/skills?on_conflict=url", json=second)
+        refreshed = self.client.post(
+            "/rest/v1/rpc/vector_search_skills",
+            json={"query_embedding": [0.0, 1.0] + [0.0] * 382, "match_count": 5},
+        )
+        self.assertEqual(refreshed.json()[0]["id"], "skill-2")
 
     def test_route_returns_full_with_inline_content(self) -> None:
         candidate = {
