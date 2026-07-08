@@ -3,6 +3,7 @@ local_skills.db
 local_skills.db-wal
 local_skills.db-shm
 skills_library/
+content_blobs/
 migrate_state.json
 
 # logs

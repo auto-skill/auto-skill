@@ -83,5 +83,15 @@ public read-only guard intentionally does not allow `/route-metrics`.
 The current app still stores SKILL.md files under `skills_library/`, so that
 directory needs its own backup until content is moved into SQLite.
 
+For cheaper content-addressed storage, build gzip blobs keyed by normalized
+content hash:
+
+```powershell
+python pack_content_blobs.py
+```
+
+The output in `content_blobs/` can be synced to R2 later without duplicating
+identical skill bodies.
+
 See `RUNBOOK.md` for operations notes and the current Windows host update
 path.

@@ -122,6 +122,17 @@ Cloudflare R2 through the S3-compatible API.
 Keep both. SQLite has the searchable metadata and vectors; `skills_library/`
 currently has the SKILL.md content used for full routes and `/content/{hash}`.
 
+To prepare deduped compressed content blobs for R2:
+
+```powershell
+python pack_content_blobs.py
+aws --endpoint-url $env:R2_ENDPOINT s3 sync content_blobs "s3://$env:R2_BUCKET/skills-content/"
+```
+
+This is a content-addressed export, not yet the runtime source of truth. Keep
+the normal `skills_library/` backup until `/content/{hash}` reads from R2 or a
+local cache.
+
 Useful backup checks:
 
 ```bash
