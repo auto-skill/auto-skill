@@ -301,6 +301,27 @@ class ApiContractTests(unittest.TestCase):
         )
         self.assertEqual(refreshed.json()[0]["id"], "skill-2")
 
+        third = {
+            "id": "skill-3",
+            "name": "presentation-builder",
+            "description": "Build polished slide decks.",
+            "source": "test",
+            "url": "https://example.com/slides",
+            "risk_score": 0,
+            "quality_status": "active",
+        }
+        self.client.post("/rest/v1/skills?on_conflict=url", json=third)
+        patch = self.client.patch(
+            "/rest/v1/skills?id=eq.skill-3",
+            json={"embedding": [0.0, 0.0, 1.0] + [0.0] * 381},
+        )
+        self.assertEqual(patch.status_code, 204)
+        patched = self.client.post(
+            "/rest/v1/rpc/vector_search_skills",
+            json={"query_embedding": [0.0, 0.0, 1.0] + [0.0] * 381, "match_count": 5},
+        )
+        self.assertEqual(patched.json()[0]["id"], "skill-3")
+
     def test_route_returns_full_with_inline_content(self) -> None:
         candidate = {
             "id": "skill-1",

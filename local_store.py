@@ -341,6 +341,8 @@ def update_rows(table: str, filters: dict, data: dict) -> int:
         for col in TABLES[table]["json_cols"]:
             if col in data and not isinstance(data[col], str):
                 data[col] = json.dumps(data[col])
+        if table == "skills" and isinstance(data.get("embedding"), list):
+            data["embedding"] = pack_embedding(data["embedding"])
         where_sql, params = [], []
         for col, val in filters.items():
             clause, p = _apply_filter(col, val)
