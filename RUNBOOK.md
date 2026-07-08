@@ -11,7 +11,8 @@
 6. Verify:
    - `GET /healthz` returns `{"ok": true}`.
    - `GET /readyz` returns `ok=true` with nonzero total, active, and embedded
-     row counts.
+     row counts, plus `scraper.running_stale=0` and at most one fresh running
+     scrape.
    - `POST /route` for `create an excel spreadsheet report with formulas and
      charts` returns `full` or `hint`.
    - `POST /route` for `build a landing page for an AI automation agency` does
@@ -172,10 +173,12 @@ On Windows, after downloading restored artifacts:
 
 - `/healthz` is for uptime checks: process responding.
 - `/readyz` is for serving readiness: DB reachable with at least one total,
-  active, and embedded skill row.
+  active, and embedded skill row. It also includes `scraper.running_recent`,
+  `scraper.running_stale`, `scraper.last_success_at`, and recent run rows.
 
 Use `/healthz` for container health checks and `/readyz` for deployment
-promotion checks.
+promotion checks. Treat `scraper.running_stale > 0` or `running_recent > 1` as
+an alpha launch blocker even if search can still serve from the existing DB.
 
 ## Scraper Supervision
 

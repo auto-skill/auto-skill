@@ -16,7 +16,8 @@ python scraper.py
 Useful endpoints:
 
 - `GET /healthz` - process is up.
-- `GET /readyz` - SQLite is reachable with active embedded rows.
+- `GET /readyz` - SQLite is reachable with active embedded rows and scraper
+  bookkeeping summary.
 - `GET /find-semantic?q=...` - ranked search with `tier`, `score_debug`, and
   `config_version`.
 - `POST /route {"task":"..."}` - backend-owned full/hint/none route contract.
@@ -26,7 +27,10 @@ Useful endpoints:
 
 `/readyz` and `/route-metrics` include `vector_index` stats so search latency
 can be correlated with active corpus size, valid embeddings, and embedding
-matrix cache state before moving to a new vector backend.
+matrix cache state before moving to a new vector backend. `/readyz` also
+includes `scraper.running_recent`, `scraper.running_stale`,
+`scraper.last_success_at`, and recent run rows so launch checks can catch
+duplicate or stale scraper processes.
 
 ## Quality Gate
 

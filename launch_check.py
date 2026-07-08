@@ -184,6 +184,25 @@ def _route_metrics(body: dict) -> dict:
     return ((body.get("score_debug") or {}).get("metrics") or {})
 
 
+def _check_scraper_summary(reporter: Reporter, name: str, summary: dict) -> None:
+    if not summary:
+        reporter.warn(name, "scraper summary missing from readiness payload")
+        return
+    running_recent = int(summary.get("running_recent") or 0)
+    running_stale = int(summary.get("running_stale") or 0)
+    last_success_at = summary.get("last_success_at") or "never"
+    if running_stale:
+        reporter.fail(name, f"running_stale={running_stale}, last_success_at={last_success_at}")
+    elif running_recent > 1:
+        reporter.fail(name, f"running_recent={running_recent}; only one scraper should run")
+    else:
+        reporter.pass_(
+            name,
+            f"running_recent={running_recent}, running_stale={running_stale}, "
+            f"last_success_at={last_success_at}",
+        )
+
+
 def _check_route_budget(
     reporter: Reporter,
     name: str,
@@ -232,15 +251,19 @@ def check_http(
     status, body = _json_request(base_url, "GET", "/readyz")
     if status == 200 and body.get("ok") is True and body.get("active_skills", 0) > 0 and body.get("embedded_skills", 0) > 0:
         reporter.pass_("http readyz", json.dumps(body, sort_keys=True)[:220])
+        _check_scraper_summary(reporter, "readyz scraper", body.get("scraper") or {})
     else:
         reporter.fail("http readyz", f"status={status}, body={body}")
 
     status, body = _json_request(base_url, "GET", "/status")
     if status == 200:
-        recent_runs = body.get("recent_runs") or []
+        summary = body.get("scraper") or {}
+        recent_runs = summary.get("recent_runs") or body.get("recent_runs") or []
         running = [run for run in recent_runs if run.get("status") == "running"]
         total = body.get("total_skills", "unknown")
-        if len(running) > 1:
+        if summary:
+            _check_scraper_summary(reporter, "scraper status", summary)
+        elif len(running) > 1:
             reporter.fail("scraper status", f"{len(running)} recent scrape runs are still marked running")
         else:
             reporter.pass_("scraper status", f"total_skills={total}, running_recent={len(running)}")

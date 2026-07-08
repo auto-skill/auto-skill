@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -105,6 +106,40 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(body["embedded_skills"], 1)
         self.assertEqual(body["vector_index"]["valid_vectors"], 1)
         self.assertEqual(body["vector_index"]["vector_dim"], 384)
+        self.assertEqual(body["scraper"]["running_recent"], 0)
+        self.assertEqual(body["scraper"]["running_stale"], 0)
+
+    def test_readyz_includes_scraper_bookkeeping(self) -> None:
+        self._insert_skill()
+        now = datetime.now(timezone.utc)
+        last_success_at = (now - timedelta(minutes=10)).isoformat()
+        stale_started_at = (now - timedelta(seconds=scraper.STALE_SCRAPE_RUN_SECONDS + 30)).isoformat()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO scrape_runs (
+                    id, started_at, finished_at, status, skills_found, new_skills_found
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("run-done", last_success_at, last_success_at, "done", 10, 2),
+            )
+            conn.execute(
+                "INSERT INTO scrape_runs (id, started_at, status) VALUES (?, ?, ?)",
+                ("run-stale", stale_started_at, "running"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        response = self.client.get("/readyz")
+        self.assertEqual(response.status_code, 200)
+        scraper_summary = response.json()["scraper"]
+        self.assertEqual(scraper_summary["running_recent"], 0)
+        self.assertEqual(scraper_summary["running_stale"], 1)
+        self.assertEqual(scraper_summary["last_success_at"], last_success_at)
+        self.assertEqual(scraper_summary["recent_runs"][0]["id"], "run-done")
+        self.assertGreater(scraper_summary["recent_runs"][1]["age_seconds"], scraper.STALE_SCRAPE_RUN_SECONDS)
 
     def test_public_guard_allows_readiness_and_route_but_blocks_writes(self) -> None:
         self.assertEqual(self.client.get("/readyz", headers={"x-forwarded-for": "203.0.113.10"}).status_code, 503)

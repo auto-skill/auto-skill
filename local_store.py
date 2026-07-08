@@ -464,6 +464,66 @@ def route_event_summary(hours: int = 24) -> dict:
         conn.close()
 
 
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def scrape_run_summary(stale_after_seconds: int = 7200, limit: int = 5) -> dict:
+    """Return recent scraper bookkeeping for readiness and launch checks."""
+    stale_after_seconds = max(1, int(stale_after_seconds or 7200))
+    limit = max(1, min(int(limit or 5), 20))
+    now = datetime.now(timezone.utc)
+    conn = get_conn()
+    try:
+        recent = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT id, started_at, finished_at, status, skills_found,
+                       new_skills_found, error
+                FROM scrape_runs
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        row = conn.execute(
+            """
+            SELECT MAX(finished_at) AS last_success_at
+            FROM scrape_runs
+            WHERE status='done'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    running_recent = 0
+    running_stale = 0
+    for run in recent:
+        started_at = _parse_iso(run.get("started_at"))
+        age_seconds = int((now - started_at).total_seconds()) if started_at else None
+        run["age_seconds"] = age_seconds
+        if run.get("status") == "running":
+            if age_seconds is not None and age_seconds > stale_after_seconds:
+                running_stale += 1
+            else:
+                running_recent += 1
+    return {
+        "stale_after_seconds": stale_after_seconds,
+        "running_recent": running_recent,
+        "running_stale": running_stale,
+        "last_success_at": row["last_success_at"] if row else None,
+        "recent_runs": recent,
+    }
+
+
 def update_route_event_feedback(route_id: str, outcome: str, source: str = "", note: str = "") -> bool:
     """Attach privacy-safe outcome feedback to a route event."""
     conn = get_conn()

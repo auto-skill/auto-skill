@@ -105,11 +105,13 @@ async def readyz():
             ).fetchone()[0]
             embedded = conn.execute("SELECT COUNT(*) FROM skills WHERE embedding IS NOT NULL").fetchone()[0]
             vector_index = store.vector_index_stats()
+            scraper_summary = store.scrape_run_summary(STALE_SCRAPE_RUN_SECONDS)
             return {
                 "total_skills": total,
                 "active_skills": active,
                 "embedded_skills": embedded,
                 "vector_index": vector_index,
+                "scraper": scraper_summary,
             }
         finally:
             conn.close()
@@ -1879,6 +1881,7 @@ async def status():
         "running": running,
         "total_skills": total,
         "flagged_skills": flagged,
+        "scraper": store.scrape_run_summary(STALE_SCRAPE_RUN_SECONDS),
         "recent_runs": runs,
         "continuous_mode": True,
         "interval_seconds": SCRAPE_INTERVAL_SECONDS,
