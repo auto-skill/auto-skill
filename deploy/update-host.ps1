@@ -68,7 +68,7 @@ if (-not $SkipInstall) {
 if (-not $SkipTests) {
     Invoke-Native "unit tests" { python -m unittest discover -s tests -v }
     Invoke-Native "syntax check" {
-        python -m py_compile quality.py local_store.py local_api.py recommender.py scraper.py backfill_quality.py cleanup_scrape_runs.py worker.py reindex.py backfill_embeddings.py embeddings.py mcp_server.py eval_search.py launch_check.py tests\test_api_contract.py tests\test_quality.py tests\test_quality_routing.py
+        python -m py_compile quality.py local_store.py local_api.py recommender.py scraper.py backfill_quality.py cleanup_scrape_runs.py worker.py reindex.py backfill_embeddings.py embeddings.py mcp_server.py eval_search.py launch_check.py pack_content_blobs.py tests\test_api_contract.py tests\test_quality.py tests\test_quality_routing.py tests\test_content_blobs.py
     }
 }
 

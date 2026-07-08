@@ -114,6 +114,10 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(blocked.status_code, 403)
         self.assertEqual(blocked.json()["error"], "read-only public API")
 
+        metrics = self.client.get("/route-metrics", headers={"x-forwarded-for": "203.0.113.10"})
+        self.assertEqual(metrics.status_code, 403)
+        self.assertEqual(metrics.json()["error"], "read-only public API")
+
     def test_route_returns_full_with_inline_content(self) -> None:
         candidate = {
             "id": "skill-1",
