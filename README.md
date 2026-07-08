@@ -22,6 +22,7 @@ Useful endpoints:
 - `POST /route {"task":"..."}` - backend-owned full/hint/none route contract.
 - `GET /content/{content_hash}` - immutable cached SKILL.md content when known.
 - `GET /route-metrics` - local-only route latency/token analytics summary.
+- `POST /route-feedback` - local-only privacy-safe route outcome feedback.
 
 ## Quality Gate
 
@@ -66,7 +67,8 @@ estimates:
 Each `/route` call also appends a privacy-safe `route_events` row keyed by a
 query hash, not raw prompt text. Use `GET /route-metrics` locally to inspect
 recent tier distribution, slow routes, and average response token size. The
-public read-only guard intentionally does not allow `/route-metrics`.
+public read-only guard intentionally does not allow `/route-metrics` or
+`/route-feedback`.
 
 ## Deploy Skeleton
 

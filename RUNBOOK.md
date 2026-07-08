@@ -83,6 +83,12 @@ Inspect route analytics locally on the host:
 Invoke-RestMethod http://127.0.0.1:8000/route-metrics | ConvertTo-Json -Depth 5
 ```
 
+Route outcome feedback is also local-only:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/route-feedback -ContentType "application/json" -Body '{"route_id":"...","outcome":"used","source":"manual-check"}'
+```
+
 `deploy\update-host.ps1` can also run the optional maintenance steps:
 
 ```powershell

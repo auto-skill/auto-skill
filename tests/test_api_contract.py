@@ -118,6 +118,14 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(metrics.status_code, 403)
         self.assertEqual(metrics.json()["error"], "read-only public API")
 
+        feedback = self.client.post(
+            "/route-feedback",
+            json={"route_id": "route-1", "outcome": "used"},
+            headers={"x-forwarded-for": "203.0.113.10"},
+        )
+        self.assertEqual(feedback.status_code, 403)
+        self.assertEqual(feedback.json()["error"], "read-only public API")
+
     def test_route_returns_full_with_inline_content(self) -> None:
         candidate = {
             "id": "skill-1",
@@ -234,7 +242,57 @@ class ApiContractTests(unittest.TestCase):
         self.assertTrue(metrics["ok"])
         self.assertGreaterEqual(metrics["total"], 1)
         self.assertGreaterEqual(metrics["tiers"]["hint"], 1)
+        self.assertGreaterEqual(metrics["outcomes"]["pending"], 1)
         self.assertGreaterEqual(metrics["avg_response_tokens"], 1)
+
+    def test_route_feedback_updates_existing_route_event(self) -> None:
+        candidate = {
+            "id": "skill-1",
+            "name": "spreadsheet-reporter",
+            "description": "Build spreadsheet reports with formulas and charts.",
+            "source": "github_skill_file",
+            "url": "https://example.com/spreadsheet",
+            "risk_score": 0,
+            "quality_status": "metadata_only",
+            "quality_score": 55,
+            "rank": 1.0,
+            "similarity": 0.95,
+        }
+
+        async def fake_retrieve(client, query, limit):
+            del client, query, limit
+            return [candidate]
+
+        with patch("recommender.retrieve_skills", fake_retrieve):
+            route = self.client.post("/route", json={"task": "create an excel report with formulas"}).json()
+
+        feedback = self.client.post(
+            "/route-feedback",
+            json={
+                "route_id": route["route_id"],
+                "outcome": "used",
+                "source": "unit-test",
+                "note": "applied",
+            },
+        )
+        self.assertEqual(feedback.status_code, 200)
+        self.assertEqual(feedback.json()["outcome"], "used")
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            event = conn.execute("SELECT * FROM route_events WHERE id=?", (route["route_id"],)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(event["outcome"], "used")
+        self.assertEqual(event["feedback_source"], "unit-test")
+
+    def test_route_feedback_rejects_unknown_outcome(self) -> None:
+        response = self.client.post(
+            "/route-feedback",
+            json={"route_id": "route-1", "outcome": "raw prompt was great"},
+        )
+        self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":

@@ -360,6 +360,13 @@ class RouteRequest(BaseModel):
     limit: int = 8
 
 
+class RouteFeedbackRequest(BaseModel):
+    route_id: str
+    outcome: str
+    source: str = ""
+    note: str = ""
+
+
 NONE_MESSAGE = ("I couldn't find anything matching that. Try describing the task with "
                 "different words - e.g. the tool, file type, or service involved.")
 
@@ -715,3 +722,30 @@ async def route_metrics(hours: int = 24):
     hours = max(1, min(int(hours or 24), 24 * 30))
     summary = await asyncio.to_thread(store.route_event_summary, hours)
     return {"ok": True, **summary, "config_version": CONFIG_VERSION}
+
+
+@router.post("/route-feedback")
+async def route_feedback(body: RouteFeedbackRequest):
+    """Local-only outcome feedback for route analytics.
+
+    The public read-only guard intentionally blocks this endpoint for forwarded
+    traffic. Keep payloads privacy-safe: route_id plus a small enum-style
+    outcome, never raw prompts.
+    """
+    outcome = (body.outcome or "").strip().lower()
+    allowed = {"used", "skipped", "installed", "failed", "dismissed"}
+    if outcome not in allowed:
+        return Response(status_code=400)
+    route_id = (body.route_id or "").strip()
+    if not route_id:
+        return Response(status_code=400)
+    updated = await asyncio.to_thread(
+        store.update_route_event_feedback,
+        route_id,
+        outcome,
+        body.source,
+        body.note,
+    )
+    if not updated:
+        return Response(status_code=404)
+    return {"ok": True, "route_id": route_id, "outcome": outcome}

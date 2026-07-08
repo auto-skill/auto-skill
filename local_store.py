@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS route_events (
     content_tokens INTEGER,
     response_tokens INTEGER,
     config_version TEXT,
+    outcome TEXT,
+    outcome_at TEXT,
+    feedback_source TEXT,
+    feedback_note TEXT,
     warnings TEXT DEFAULT '[]'
 );
 
@@ -121,6 +125,13 @@ SKILL_COLUMN_DEFAULTS = {
     "category": "TEXT",
 }
 
+ROUTE_EVENT_COLUMN_DEFAULTS = {
+    "outcome": "TEXT",
+    "outcome_at": "TEXT",
+    "feedback_source": "TEXT",
+    "feedback_note": "TEXT",
+}
+
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)  # ride out concurrent write bursts (migration, embed loop)
@@ -137,6 +148,10 @@ def init_db() -> None:
         for col, spec in SKILL_COLUMN_DEFAULTS.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE skills ADD COLUMN {col} {spec}")
+        route_existing = {row["name"] for row in conn.execute("PRAGMA table_info(route_events)").fetchall()}
+        for col, spec in ROUTE_EVENT_COLUMN_DEFAULTS.items():
+            if col not in route_existing:
+                conn.execute(f"ALTER TABLE route_events ADD COLUMN {col} {spec}")
         conn.commit()
     finally:
         conn.close()
@@ -356,6 +371,14 @@ def route_event_summary(hours: int = 24) -> dict:
                 (cutoff_iso,),
             ).fetchall()
         }
+        outcomes = {
+            row["outcome"] or "pending": row["count"]
+            for row in conn.execute(
+                "SELECT outcome, COUNT(*) AS count FROM route_events "
+                "WHERE created_at >= ? GROUP BY outcome",
+                (cutoff_iso,),
+            ).fetchall()
+        }
         row = conn.execute(
             """
             SELECT
@@ -393,6 +416,7 @@ def route_event_summary(hours: int = 24) -> dict:
             "window_hours": hours,
             "total": total,
             "tiers": tiers,
+            "outcomes": outcomes,
             "avg_latency_ms": int(row["avg_latency_ms"] or 0),
             "avg_retrieval_ms": int(row["avg_retrieval_ms"] or 0),
             "avg_content_ms": int(row["avg_content_ms"] or 0),
@@ -401,6 +425,30 @@ def route_event_summary(hours: int = 24) -> dict:
             "max_response_tokens": int(row["max_response_tokens"] or 0),
             "slowest": slowest,
         }
+    finally:
+        conn.close()
+
+
+def update_route_event_feedback(route_id: str, outcome: str, source: str = "", note: str = "") -> bool:
+    """Attach privacy-safe outcome feedback to a route event."""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE route_events
+            SET outcome=?, outcome_at=?, feedback_source=?, feedback_note=?
+            WHERE id=?
+            """,
+            (
+                outcome,
+                _now(),
+                source[:80],
+                note[:300],
+                route_id,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 
