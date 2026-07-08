@@ -114,6 +114,12 @@ For `AutoSkill-API`, `AutoSkill-MCP`, and `AutoSkill-Tunnel`, the diagnostic
 reports Task Scheduler state, last run time, next run time, and last result. A
 service task that is installed but not `Running` is a launch failure.
 
+The diagnostic also posts two local route probes to `localhost:8000`: a
+direct-hit spreadsheet task and the generic landing-page trap. Those probes
+fail if local routing omits `score_debug.metrics`, exceeds the launch budgets
+for `latency_ms`, `skill_find_ms`, `injected_tokens`, or `response_tokens`, or
+full-routes the trap to a Landingi-specific skill.
+
 If Windows blocks local scripts by execution policy:
 
 ```powershell
@@ -121,9 +127,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\diagnose-host.ps1
 ```
 
 Fix failures in this order: start or restart `python scraper.py` on
-`localhost:8000`, start or restart the connector HTTP service on
-`localhost:8765`, then start or restart `cloudflared tunnel run auto-skill`.
-Only rerun the public `launch_check.py` after local API and MCP health pass.
+`localhost:8000`, fix local route probes and route budgets, start or restart
+the connector HTTP service on `localhost:8765`, then start or restart
+`cloudflared tunnel run auto-skill`. Only rerun the public `launch_check.py`
+after local API, local route, and MCP checks pass.
 
 Inspect route analytics locally on the host:
 

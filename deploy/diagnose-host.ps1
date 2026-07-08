@@ -5,7 +5,13 @@ param(
     [string]$LocalMcpHealthUrl = "http://127.0.0.1:8765/healthz",
     [string]$TaskPrefix = "AutoSkill",
     [int]$MaxBackupAgeHours = 30,
-    [int]$MinFreeDiskGb = 5
+    [int]$MinFreeDiskGb = 5,
+    [string]$DirectTask = "create an excel spreadsheet report with formulas and charts",
+    [string]$TrapTask = "build a landing page for an AI automation agency",
+    [int]$MaxRouteLatencyMs = 1500,
+    [int]$MaxRouteSkillFindMs = 1200,
+    [int]$MaxRouteInjectedTokens = 3000,
+    [int]$MaxRouteResponseTokens = 3500
 )
 
 $ErrorActionPreference = "Continue"
@@ -55,6 +61,137 @@ function Test-JsonEndpoint {
     } catch {
         Fail $Name $_.Exception.Message
     }
+}
+
+function Get-JsonValue {
+    param(
+        $Object,
+        [string]$Name
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+    if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) {
+        return $Object[$Name]
+    }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        return $property.Value
+    }
+    return $null
+}
+
+function Get-MetricInt {
+    param(
+        $Metrics,
+        [string[]]$Names
+    )
+
+    foreach ($name in $Names) {
+        $value = Get-JsonValue $Metrics $name
+        if ($null -ne $value) {
+            return [int]$value
+        }
+    }
+    return 0
+}
+
+function Test-RouteBudget {
+    param(
+        [string]$Name,
+        $Body
+    )
+
+    $scoreDebug = Get-JsonValue $Body "score_debug"
+    $metrics = Get-JsonValue $scoreDebug "metrics"
+    if ($null -eq $metrics) {
+        Fail $Name "route response did not include score_debug.metrics"
+        return
+    }
+
+    $latencyMs = Get-MetricInt $metrics @("latency_ms")
+    $skillFindMs = Get-MetricInt $metrics @("skill_find_ms", "retrieval_ms")
+    $injectedTokens = Get-MetricInt $metrics @("injected_tokens", "content_tokens")
+    $responseTokens = Get-MetricInt $metrics @("response_tokens")
+
+    if ($latencyMs -gt $MaxRouteLatencyMs) {
+        Fail $Name "latency_ms=$latencyMs exceeded budget $MaxRouteLatencyMs"
+    } elseif ($skillFindMs -gt $MaxRouteSkillFindMs) {
+        Fail $Name "skill_find_ms=$skillFindMs exceeded budget $MaxRouteSkillFindMs"
+    } elseif ($injectedTokens -gt $MaxRouteInjectedTokens) {
+        Fail $Name "injected_tokens=$injectedTokens exceeded budget $MaxRouteInjectedTokens"
+    } elseif ($responseTokens -gt $MaxRouteResponseTokens) {
+        Fail $Name "response_tokens=$responseTokens exceeded budget $MaxRouteResponseTokens"
+    } else {
+        Pass $Name "latency_ms=$latencyMs, skill_find_ms=$skillFindMs, injected_tokens=$injectedTokens, response_tokens=$responseTokens"
+    }
+}
+
+function Invoke-RouteProbe {
+    param(
+        [string]$Name,
+        [string]$Task
+    )
+
+    $routeUrl = "$($LocalApiUrl.TrimEnd('/'))/route"
+    $payload = @{
+        task = $Task
+        client = "diagnose-host"
+        client_version = "local"
+    } | ConvertTo-Json -Depth 4
+
+    try {
+        return Invoke-RestMethod -Method Post -Uri $routeUrl -Headers @{ Accept = "application/json" } -ContentType "application/json" -Body $payload -TimeoutSec 20
+    } catch {
+        Fail $Name $_.Exception.Message
+        return $null
+    }
+}
+
+function Test-LocalRouteDirect {
+    $response = Invoke-RouteProbe "local route direct" $DirectTask
+    if ($null -eq $response) {
+        return
+    }
+
+    $tier = [string](Get-JsonValue $response "tier")
+    $skill = Get-JsonValue $response "skill"
+    $skillName = Get-JsonValue $skill "name"
+    if (-not $skillName) {
+        $skillName = Get-JsonValue $skill "slug"
+    }
+
+    if (($tier -eq "full" -or $tier -eq "hint") -and $skill) {
+        Pass "local route direct" "tier=$tier, skill=$skillName"
+        Test-RouteBudget "local route direct budget" $response
+    } else {
+        $json = $response | ConvertTo-Json -Depth 8 -Compress
+        Fail "local route direct" "expected tier full|hint with skill: $json"
+    }
+}
+
+function Test-LocalRouteTrap {
+    $response = Invoke-RouteProbe "local route trap" $TrapTask
+    if ($null -eq $response) {
+        return
+    }
+
+    $tier = [string](Get-JsonValue $response "tier")
+    $skill = Get-JsonValue $response "skill"
+    $skillName = Get-JsonValue $skill "name"
+    if (-not $skillName) {
+        $skillName = Get-JsonValue $skill "slug"
+    }
+    $skillBlob = "$skillName $(Get-JsonValue $skill "url") $(Get-JsonValue $skill "source_url")".ToLowerInvariant()
+
+    if ($tier -eq "full" -and $skillBlob.Contains("landingi")) {
+        Fail "local route trap" "generic landing-page prompt full-routed to Landingi"
+        return
+    }
+
+    Pass "local route trap" "tier=$tier, skill=$skillName"
+    Test-RouteBudget "local route trap budget" $response
 }
 
 function Test-PathPresent {
@@ -190,6 +327,8 @@ if (-not (Test-Path -LiteralPath $backupRoot)) {
 
 Test-JsonEndpoint "local API healthz" "$($LocalApiUrl.TrimEnd('/'))/healthz" -RequireOk -RequireService
 Test-JsonEndpoint "local API readyz" "$($LocalApiUrl.TrimEnd('/'))/readyz" -RequireOk
+Test-LocalRouteDirect
+Test-LocalRouteTrap
 Test-JsonEndpoint "local MCP healthz" $LocalMcpHealthUrl -RequireOk
 Test-JsonEndpoint "public API healthz" "$($BaseUrl.TrimEnd('/'))/healthz" -RequireOk -RequireService
 Test-JsonEndpoint "public MCP healthz" $McpHealthUrl -RequireOk
