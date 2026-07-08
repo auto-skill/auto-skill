@@ -23,9 +23,11 @@
    - Route `score_debug.metrics.latency_ms`,
      `score_debug.metrics.skill_find_ms`, and
      `score_debug.metrics.injected_tokens` are under launch budgets.
-6. Confirm public forwarded requests cannot reach write endpoints:
-   `/scrape`, `/rescan`, `/normalize-db`, and mutating `/rest/v1/*` should be
-   blocked by the read-only guard when forwarded through Cloudflare.
+6. Confirm public forwarded requests cannot reach admin or write endpoints:
+   `/scrape`, `/seed-backlog`, `/rescan`, `/normalize-db`,
+   `/normalize-db/progress`, `/route-metrics`, `/route-feedback`, and mutating
+   `/rest/v1/*` should be blocked by the read-only guard when forwarded
+   through Cloudflare.
 7. Run the launch preflight:
 
 ```powershell

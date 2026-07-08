@@ -147,21 +147,26 @@ class ApiContractTests(unittest.TestCase):
             self.client.post("/route", json={"task": ""}, headers={"x-forwarded-for": "203.0.113.10"}).status_code,
             403,
         )
-        blocked = self.client.post("/scrape", headers={"x-forwarded-for": "203.0.113.10"})
-        self.assertEqual(blocked.status_code, 403)
-        self.assertEqual(blocked.json()["error"], "read-only public API")
-
-        metrics = self.client.get("/route-metrics", headers={"x-forwarded-for": "203.0.113.10"})
-        self.assertEqual(metrics.status_code, 403)
-        self.assertEqual(metrics.json()["error"], "read-only public API")
-
-        feedback = self.client.post(
-            "/route-feedback",
-            json={"route_id": "route-1", "outcome": "used"},
-            headers={"x-forwarded-for": "203.0.113.10"},
-        )
-        self.assertEqual(feedback.status_code, 403)
-        self.assertEqual(feedback.json()["error"], "read-only public API")
+        probes = [
+            ("post", "/scrape", None),
+            ("post", "/seed-backlog", None),
+            ("post", "/normalize-db", None),
+            ("get", "/normalize-db/progress", None),
+            ("post", "/rescan", None),
+            ("get", "/route-metrics", None),
+            ("post", "/route-feedback", {"route_id": "route-1", "outcome": "used"}),
+            ("post", "/rest/v1/skills", {"id": "public-guard", "name": "blocked", "source": "test"}),
+            ("patch", "/rest/v1/skills?id=eq.public-guard", {"name": "blocked"}),
+            ("delete", "/rest/v1/skills?id=eq.public-guard", None),
+        ]
+        for method, path, json_body in probes:
+            request = getattr(self.client, method)
+            kwargs = {"headers": {"x-forwarded-for": "203.0.113.10"}}
+            if json_body is not None:
+                kwargs["json"] = json_body
+            blocked = request(path, **kwargs)
+            self.assertEqual(blocked.status_code, 403, path)
+            self.assertEqual(blocked.json()["error"], "read-only public API", path)
 
     def test_scrape_run_lease_allows_only_one_running_row(self) -> None:
         first = self.client.post("/rest/v1/scrape_runs", json={"id": "run-1", "status": "running"})

@@ -323,17 +323,33 @@ def check_http(
             max_route_response_tokens,
         )
 
-    status, body = _json_request(
-        base_url,
-        "POST",
-        "/scrape",
-        {},
-        headers={"x-forwarded-for": "203.0.113.10"},
-    )
-    if status == 403:
-        reporter.pass_("public write guard", "forwarded /scrape request returned 403")
+    guarded_paths = [
+        ("POST", "/scrape", {}),
+        ("POST", "/seed-backlog", {}),
+        ("POST", "/normalize-db", {}),
+        ("GET", "/normalize-db/progress", None),
+        ("POST", "/rescan", {}),
+        ("GET", "/route-metrics", None),
+        ("POST", "/route-feedback", {"route_id": "launch-check", "outcome": "used"}),
+        ("POST", "/rest/v1/skills", {"id": "launch-check", "name": "blocked", "source": "launch_check"}),
+        ("PATCH", "/rest/v1/skills?id=eq.launch-check", {"name": "blocked"}),
+        ("DELETE", "/rest/v1/skills?id=eq.launch-check", None),
+    ]
+    guard_failures = []
+    for method, path, payload in guarded_paths:
+        status, body = _json_request(
+            base_url,
+            method,
+            path,
+            payload,
+            headers={"x-forwarded-for": "203.0.113.10"},
+        )
+        if status != 403:
+            guard_failures.append(f"{method} {path} -> status={status}, body={body}")
+    if guard_failures:
+        reporter.fail("public write/admin guard", "; ".join(guard_failures)[:1200])
     else:
-        reporter.fail("public write guard", f"expected 403 for forwarded /scrape, got status={status}, body={body}")
+        reporter.pass_("public write/admin guard", f"{len(guarded_paths)} forwarded admin/write probes returned 403")
 
 
 def check_mcp_health(reporter: Reporter, health_url: str) -> None:
