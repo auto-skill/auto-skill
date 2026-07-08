@@ -84,6 +84,24 @@ Finally prove the public service is serving the new code:
 python launch_check.py --base-url https://skills.avalahome.com --mcp-health-url https://mcp.avalahome.com/healthz --skip-env --skip-docker
 ```
 
+If either public hostname returns Cloudflare `1033` / HTTP `530`, the tunnel
+origin is unreachable. Run the read-only host diagnostic on the Windows host:
+
+```powershell
+.\deploy\diagnose-host.ps1
+```
+
+If Windows blocks local scripts by execution policy:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\diagnose-host.ps1
+```
+
+Fix failures in this order: start or restart `python scraper.py` on
+`localhost:8000`, start or restart the connector HTTP service on
+`localhost:8765`, then start or restart `cloudflared tunnel run auto-skill`.
+Only rerun the public `launch_check.py` after local API and MCP health pass.
+
 Inspect route analytics locally on the host:
 
 ```powershell
