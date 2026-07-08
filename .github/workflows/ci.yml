@@ -23,15 +23,8 @@ jobs:
       - name: Run unit and API contract tests
         run: python -m unittest discover -s tests -v
 
-      - name: Compile launch-critical modules
-        run: >
-          python -m py_compile
-          quality.py local_store.py local_api.py recommender.py scraper.py
-          backfill_quality.py cleanup_scrape_runs.py worker.py reindex.py
-          backfill_embeddings.py embeddings.py mcp_server.py eval_search.py
-          eval_compare.py launch_check.py pack_content_blobs.py
-          tests/test_api_contract.py tests/test_eval_compare.py tests/test_quality.py tests/test_quality_routing.py
-          tests/test_content_blobs.py
+      - name: Compile Python sources
+        run: python -m compileall -q -x '(\.git|__pycache__|\.venv|venv|data|skills_library|content_blobs|eval-results)' .
 
       - name: Parse PowerShell deploy scripts
         shell: pwsh
