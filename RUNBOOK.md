@@ -206,6 +206,7 @@ only when you already pulled in the same session.
 Copy-Item deploy\.env.example deploy\.env
 # Fill in Cloudflare/R2/GitHub values.
 New-Item -ItemType Directory -Force -Path data, skills_library
+python deploy\compose_preflight.py
 docker compose --env-file deploy\.env -f deploy\docker-compose.yml up -d --build
 ```
 
@@ -220,6 +221,12 @@ The compose file uses bind mounts instead of opaque Docker volumes:
 
 Seed a VPS by copying the current DB and library into those paths before the
 first `docker compose up`.
+
+`python deploy\compose_preflight.py` fails when launch-critical values are
+missing from `deploy\.env`, when the seeded DB/library files are absent, or
+when `docker compose config` cannot parse the stack. Use
+`--skip-seed-checks --skip-docker` only for CI or local config review before a
+real host exists.
 
 ## Hosting Upgrade Ladder
 
