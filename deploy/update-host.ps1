@@ -101,6 +101,7 @@ if (-not $SkipTests) {
         [scriptblock]::Create((Get-Content -Raw deploy\backup-local.ps1)) | Out-Null
         [scriptblock]::Create((Get-Content -Raw deploy\diagnose-host.ps1)) | Out-Null
         [scriptblock]::Create((Get-Content -Raw deploy\install-windows-tasks.ps1)) | Out-Null
+        [scriptblock]::Create((Get-Content -Raw deploy\recover-host.ps1)) | Out-Null
         [scriptblock]::Create((Get-Content -Raw deploy\restore-local.ps1)) | Out-Null
         [scriptblock]::Create((Get-Content -Raw deploy\update-host.ps1)) | Out-Null
         [scriptblock]::Create((Get-Content -Raw start_cloudflared.ps1)) | Out-Null

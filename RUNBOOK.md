@@ -106,7 +106,15 @@ python launch_check.py --base-url https://skills.avalahome.com --mcp-health-url 
 ```
 
 If either public hostname returns Cloudflare `1033` / HTTP `530`, the tunnel
-origin is unreachable. Run the read-only host diagnostic on the Windows host:
+origin is unreachable. To apply the standard pull, task install/restart, local
+health waits, public launch check, and failure diagnosis in one pass, run this
+on the Windows host:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\recover-host.ps1
+```
+
+If you only want a read-only failure packet, run:
 
 ```powershell
 .\deploy\diagnose-host.ps1
