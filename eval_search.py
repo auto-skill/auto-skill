@@ -127,9 +127,9 @@ ROUTE_LATENCY_BUDGET_MS = int(os.getenv("ROUTE_LATENCY_BUDGET_MS", "1500"))
 ROUTE_RESPONSE_TOKEN_BUDGET = int(os.getenv("ROUTE_RESPONSE_TOKEN_BUDGET", "3500"))
 
 ROUTE_CASES = [
-    ("spreadsheet full route", "create an excel spreadsheet report with formulas and charts", {"full", "hint"}),
-    ("landing page platform trap", "build a landing page for an AI automation agency", {"hint", "none", "full"}),
-    ("acknowledgement/meta prompt", "ok sounds good lets do it", {"none", "hint"}),
+    ("spreadsheet full route", "create an excel spreadsheet report with formulas and charts", {"full", "hint"}, 0),
+    ("landing page platform trap", "build a landing page for an AI automation agency", {"hint", "none", "full"}, 2),
+    ("acknowledgement/meta prompt", "ok sounds good lets do it", {"none", "hint"}, 0),
 ]
 
 
@@ -235,7 +235,7 @@ async def main() -> int:
     # becoming too slow or too expensive to inject.
     route_ok = 0
     async with httpx.AsyncClient() as client:
-        for label, query, allowed_tiers in ROUTE_CASES:
+        for label, query, allowed_tiers, min_hint_candidates in ROUTE_CASES:
             r = await client.post(
                 f"{SUPABASE_URL}/route",
                 json={"task": query, "client": "eval_search", "client_version": "local"},
@@ -248,11 +248,14 @@ async def main() -> int:
             metrics = ((body.get("score_debug") or {}).get("metrics") or {})
             latency_ms = int(metrics.get("latency_ms") or 0)
             response_tokens = int(metrics.get("response_tokens") or 0)
+            candidates = body.get("candidates") if isinstance(body.get("candidates"), list) else []
+            candidate_count = len(candidates)
             ok = (
                 r.status_code == 200
                 and bool(body.get("route_id"))
                 and tier in allowed_tiers
                 and not (label == "landing page platform trap" and tier == "full" and "landingi" in skill_blob)
+                and (tier != "hint" or candidate_count >= min_hint_candidates)
                 and latency_ms <= ROUTE_LATENCY_BUDGET_MS
                 and response_tokens <= ROUTE_RESPONSE_TOKEN_BUDGET
             )
@@ -260,7 +263,8 @@ async def main() -> int:
             print(
                 "  route-bench "
                 f"{'OK ' if ok else 'FAIL'} {label}: tier={tier}, "
-                f"latency_ms={latency_ms}, response_tokens={response_tokens}"
+                f"latency_ms={latency_ms}, response_tokens={response_tokens}, "
+                f"candidates={candidate_count}"
             )
     print(
         f"route benchmark: {route_ok}/{len(ROUTE_CASES)} passed "
