@@ -32,6 +32,7 @@ SEARXNG_URL = os.getenv("SEARXNG_URL", "").rstrip("/")
 SCRAPE_INTERVAL_SECONDS = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "900"))
 STALE_SCRAPE_RUN_SECONDS = int(os.getenv("STALE_SCRAPE_RUN_SECONDS", "7200"))
 AUTO_START_SCRAPER = os.getenv("AUTO_START_SCRAPER", "1").lower() not in {"0", "false", "no"}
+API_VERSION = "quality-route-v1"
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -90,7 +91,7 @@ class ScrapeAlreadyRunning(RuntimeError):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "service": "auto-skill-api"}
+    return {"ok": True, "service": "auto-skill-api", "api_version": API_VERSION}
 
 
 @app.get("/readyz")

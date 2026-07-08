@@ -69,6 +69,14 @@ class ApiContractTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_healthz_identifies_current_api(self) -> None:
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["service"], "auto-skill-api")
+        self.assertEqual(body["api_version"], scraper.API_VERSION)
+
     def test_readyz_requires_active_embedded_rows(self) -> None:
         response = self.client.get("/readyz")
         self.assertEqual(response.status_code, 503)

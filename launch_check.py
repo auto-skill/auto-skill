@@ -186,8 +186,14 @@ def check_http(reporter: Reporter, base_url: str, direct_task: str, trap_task: s
     except Exception as exc:
         reporter.fail("http", f"/healthz failed: {exc}")
         return
-    if status == 200 and body.get("ok") is True:
+    if status == 200 and body.get("ok") is True and body.get("service") == "auto-skill-api":
         reporter.pass_("http healthz", json.dumps(body, sort_keys=True)[:220])
+    elif status == 200 and body.get("ok") is True:
+        reporter.fail(
+            "http healthz",
+            "stale or unknown health response; expected service=auto-skill-api, "
+            f"body={json.dumps(body, sort_keys=True)[:220]}",
+        )
     else:
         reporter.fail("http healthz", f"status={status}, body={body}")
 
