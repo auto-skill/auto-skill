@@ -302,6 +302,9 @@ Before a worker starts a new run it marks `running` rows older than
 more than one scraper process is active; stop the extra process before
 trusting the run counts.
 
+SQLite also enforces a single `status='running'` scrape row, so a duplicate
+worker startup should fail fast instead of creating a second active scrape.
+
 After stopping the extra process, clean up stale bookkeeping rows:
 
 ```powershell

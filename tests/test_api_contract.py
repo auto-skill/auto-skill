@@ -163,6 +163,23 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(feedback.status_code, 403)
         self.assertEqual(feedback.json()["error"], "read-only public API")
 
+    def test_scrape_run_lease_allows_only_one_running_row(self) -> None:
+        first = self.client.post("/rest/v1/scrape_runs", json={"id": "run-1", "status": "running"})
+        self.assertEqual(first.status_code, 200)
+
+        second = self.client.post("/rest/v1/scrape_runs", json={"id": "run-2", "status": "running"})
+        self.assertEqual(second.status_code, 409)
+        self.assertIn("UNIQUE", second.json()["error"].upper())
+
+        done = self.client.patch(
+            "/rest/v1/scrape_runs?id=eq.run-1",
+            json={"status": "done", "finished_at": datetime.now(timezone.utc).isoformat()},
+        )
+        self.assertEqual(done.status_code, 204)
+
+        third = self.client.post("/rest/v1/scrape_runs", json={"id": "run-3", "status": "running"})
+        self.assertEqual(third.status_code, 200)
+
     def test_route_returns_full_with_inline_content(self) -> None:
         candidate = {
             "id": "skill-1",

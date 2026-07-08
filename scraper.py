@@ -1658,6 +1658,9 @@ async def start_new_scrape_run() -> str:
                 f"Scrape already running: {run.get('id')} started_at={run.get('started_at')}"
             )
         r = await supabase_post(client, "scrape_runs", {"status": "running"})
+        if r.status_code == 409:
+            raise ScrapeAlreadyRunning("Scrape already running: database lease is held")
+        r.raise_for_status()
         run = r.json()
         return run[0]["id"] if isinstance(run, list) else run.get("id")
 

@@ -5,6 +5,7 @@ PostgREST REST + RPC surface that scraper.py / recommender.py already speak
 so scraper.py can just point SUPABASE_URL at its own loopback address.
 """
 import asyncio
+import sqlite3
 
 from fastapi import APIRouter, Request, Response
 
@@ -60,7 +61,10 @@ async def rest_post(table: str, request: Request):
     body = await request.json()
     rows = body if isinstance(body, list) else [body]
     on_conflict = request.query_params.get("on_conflict")
-    out = await asyncio.to_thread(store.upsert_rows, table, rows, on_conflict)
+    try:
+        out = await asyncio.to_thread(store.upsert_rows, table, rows, on_conflict)
+    except sqlite3.IntegrityError as exc:
+        return Response(content=_dumps({"error": str(exc)}), media_type="application/json", status_code=409)
     return Response(content=_dumps(out), media_type="application/json")
 
 

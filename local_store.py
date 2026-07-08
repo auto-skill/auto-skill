@@ -148,6 +148,26 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _stale_duplicate_running_scrapes(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        "SELECT id FROM scrape_runs WHERE status='running' "
+        "ORDER BY COALESCE(started_at, '') DESC, id DESC"
+    ).fetchall()
+    if len(rows) <= 1:
+        return
+    now = _now()
+    for row in rows[1:]:
+        conn.execute(
+            "UPDATE scrape_runs SET status=?, finished_at=?, error=? WHERE id=?",
+            (
+                "stale",
+                now,
+                "Marked stale by init_db before creating the single-running scrape guard.",
+                row["id"],
+            ),
+        )
+
+
 def init_db() -> None:
     conn = get_conn()
     try:
@@ -160,6 +180,11 @@ def init_db() -> None:
         for col, spec in ROUTE_EVENT_COLUMN_DEFAULTS.items():
             if col not in route_existing:
                 conn.execute(f"ALTER TABLE route_events ADD COLUMN {col} {spec}")
+        _stale_duplicate_running_scrapes(conn)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS scrape_runs_one_running_idx "
+            "ON scrape_runs(status) WHERE status='running'"
+        )
         conn.commit()
     finally:
         conn.close()
