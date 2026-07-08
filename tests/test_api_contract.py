@@ -322,6 +322,34 @@ class ApiContractTests(unittest.TestCase):
         )
         self.assertEqual(patched.json()[0]["id"], "skill-3")
 
+    def test_vector_rpc_rejects_invalid_embeddings(self) -> None:
+        missing = self.client.post("/rest/v1/rpc/vector_search_skills", json={})
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("required", missing.json()["error"])
+
+        short = self.client.post(
+            "/rest/v1/rpc/vector_search_skills",
+            json={"query_embedding": [0.0, 1.0], "match_count": 5},
+        )
+        self.assertEqual(short.status_code, 400)
+        self.assertIn("384", short.json()["error"])
+
+        bad_value = self.client.post(
+            "/rest/v1/rpc/vector_search_skills",
+            json={"query_embedding": ["nope"] * local_store.EMBEDDING_DIM, "match_count": 5},
+        )
+        self.assertEqual(bad_value.status_code, 400)
+        self.assertIn("numbers", bad_value.json()["error"])
+
+    def test_hybrid_rpc_allows_fts_without_embedding(self) -> None:
+        self._insert_skill(active=True, embedded=False)
+        response = self.client.post(
+            "/rest/v1/rpc/hybrid_search_skills",
+            json={"query_text": "spreadsheet formulas", "match_count": 5},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["id"], "skill-1")
+
     def test_route_returns_full_with_inline_content(self) -> None:
         candidate = {
             "id": "skill-1",

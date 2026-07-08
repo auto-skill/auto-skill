@@ -710,7 +710,8 @@ def search_skills_fts(query: str, max_results: int = 10) -> list[dict]:
 # O(corpus) per query and dominates latency once the corpus is large; with the
 # cache a search is a single matvec.
 # Short TTL so freshly embedded skills become searchable within a minute.
-_EMB_DIM = 384
+EMBEDDING_DIM = 384
+_EMB_DIM = EMBEDDING_DIM
 _EMB_BLOB_LEN = _EMB_DIM * 4
 _EMB_CACHE_TTL_SECONDS = 60.0
 _emb_cache: dict = {"at": 0.0, "ids": [], "mat": None}

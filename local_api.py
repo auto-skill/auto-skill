@@ -5,6 +5,7 @@ PostgREST REST + RPC surface that scraper.py / recommender.py already speak
 so scraper.py can just point SUPABASE_URL at its own loopback address.
 """
 import asyncio
+import math
 import sqlite3
 
 from fastapi import APIRouter, Request, Response
@@ -97,7 +98,10 @@ async def rpc_search_skills(request: Request):
 @router.post("/rest/v1/rpc/vector_search_skills")
 async def rpc_vector_search_skills(request: Request):
     body = await request.json()
-    emb = _parse_embedding(body.get("query_embedding"))
+    try:
+        emb = _parse_embedding(body.get("query_embedding"), required=True)
+    except ValueError as exc:
+        return Response(content=_dumps({"error": str(exc)}), media_type="application/json", status_code=400)
     rows = await asyncio.to_thread(store.vector_search_skills, emb, body.get("match_count", 10))
     return Response(content=_dumps(rows), media_type="application/json")
 
@@ -105,7 +109,10 @@ async def rpc_vector_search_skills(request: Request):
 @router.post("/rest/v1/rpc/hybrid_search_skills")
 async def rpc_hybrid_search_skills(request: Request):
     body = await request.json()
-    emb = _parse_embedding(body.get("query_embedding"))
+    try:
+        emb = _parse_embedding(body.get("query_embedding"), required=False)
+    except ValueError as exc:
+        return Response(content=_dumps({"error": str(exc)}), media_type="application/json", status_code=400)
     rows = await asyncio.to_thread(
         store.hybrid_search_skills,
         body.get("query_text", ""),
@@ -118,15 +125,30 @@ async def rpc_hybrid_search_skills(request: Request):
     return Response(content=_dumps(rows), media_type="application/json")
 
 
-def _parse_embedding(val):
+def _parse_embedding(val, *, required: bool = False):
     if val is None:
+        if required:
+            raise ValueError("query_embedding is required")
         return None
     if isinstance(val, list):
-        return val
-    if isinstance(val, str):
+        emb = val
+    elif isinstance(val, str):
         import json as _json
-        return _json.loads(val)
-    return None
+        emb = _json.loads(val)
+    else:
+        raise ValueError("query_embedding must be a JSON array")
+
+    if not isinstance(emb, list):
+        raise ValueError("query_embedding must be a JSON array")
+    if len(emb) != store.EMBEDDING_DIM:
+        raise ValueError(f"query_embedding must have {store.EMBEDDING_DIM} dimensions")
+    try:
+        out = [float(value) for value in emb]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("query_embedding must contain only numbers") from exc
+    if not all(math.isfinite(value) for value in out):
+        raise ValueError("query_embedding must contain only finite numbers")
+    return out
 
 
 def _dumps(obj) -> str:
