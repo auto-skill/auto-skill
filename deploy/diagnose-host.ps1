@@ -204,6 +204,120 @@ function Test-PathPresent {
     }
 }
 
+function Get-UriValue {
+    param([string]$Url)
+    try {
+        return [Uri]$Url
+    } catch {
+        Warn "parse URL" "could not parse $Url`: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Get-EndpointPort {
+    param($Uri)
+    if ($null -eq $Uri) {
+        return 0
+    }
+    if ($Uri.Port -gt 0) {
+        return $Uri.Port
+    }
+    if ($Uri.Scheme -eq "https") {
+        return 443
+    }
+    return 80
+}
+
+function Test-ListeningPort {
+    param(
+        [string]$Name,
+        [int]$Port
+    )
+
+    if ($Port -le 0) {
+        Warn $Name "could not determine port"
+        return
+    }
+
+    try {
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        if (-not $listeners) {
+            Fail $Name "nothing is listening on localhost port $Port"
+            return
+        }
+        $processes = @()
+        foreach ($listener in $listeners) {
+            $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+            if ($process) {
+                $processes += "$($process.ProcessName):$($process.Id)"
+            } else {
+                $processes += "pid:$($listener.OwningProcess)"
+            }
+        }
+        $uniqueProcesses = $processes | Sort-Object -Unique
+        Pass $Name "port=$Port, listeners=$($uniqueProcesses -join ', ')"
+    } catch {
+        Warn $Name "could not inspect listening port $Port`: $($_.Exception.Message)"
+    }
+}
+
+function Test-CloudflaredConfigIngress {
+    param(
+        [string]$Path,
+        [string]$ApiHost,
+        [int]$ApiPort,
+        [string]$McpHost,
+        [int]$McpPort
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw
+    } catch {
+        Warn "cloudflared ingress" "could not read $Path`: $($_.Exception.Message)"
+        return
+    }
+
+    $missing = @()
+    if ($ApiHost -and -not $raw.Contains($ApiHost)) {
+        $missing += "hostname $ApiHost"
+    }
+    if ($McpHost -and -not $raw.Contains($McpHost)) {
+        $missing += "hostname $McpHost"
+    }
+    if ($ApiPort -gt 0 -and $raw -notmatch "https?://(localhost|127\.0\.0\.1):$ApiPort\b") {
+        $missing += "loopback API service port $ApiPort"
+    }
+    if ($McpPort -gt 0 -and $raw -notmatch "https?://(localhost|127\.0\.0\.1):$McpPort\b") {
+        $missing += "loopback MCP service port $McpPort"
+    }
+
+    if ($missing.Count -gt 0) {
+        Fail "cloudflared ingress" "config $Path is missing: $($missing -join ', ')"
+    } else {
+        Pass "cloudflared ingress" "config maps $ApiHost->$ApiPort and $McpHost->$McpPort"
+    }
+}
+
+function Show-LogTail {
+    param(
+        [string]$Name,
+        [string]$Path,
+        [int]$Lines = 12
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Warn "$Name log" "missing $Path"
+        return
+    }
+    Write-Host ""
+    Write-Host "Recent $Name log ($Path):"
+    Get-Content -LiteralPath $Path -Tail $Lines
+}
+
 function Format-TaskResult {
     param($Result)
     if ($null -eq $Result) {
@@ -288,6 +402,19 @@ $cloudflaredConfig = Join-Path $env:USERPROFILE ".cloudflared\config.yml"
 Test-PathPresent "cloudflared exe" $cloudflaredExe
 Test-PathPresent "cloudflared config" $cloudflaredConfig
 
+$baseUri = Get-UriValue $BaseUrl
+$mcpUri = Get-UriValue $McpHealthUrl
+$localApiUri = Get-UriValue $LocalApiUrl
+$localMcpUri = Get-UriValue $LocalMcpHealthUrl
+$apiPort = Get-EndpointPort $localApiUri
+$mcpPort = Get-EndpointPort $localMcpUri
+Test-CloudflaredConfigIngress `
+    -Path $cloudflaredConfig `
+    -ApiHost $(if ($baseUri) { $baseUri.Host } else { "" }) `
+    -ApiPort $apiPort `
+    -McpHost $(if ($mcpUri) { $mcpUri.Host } else { "" }) `
+    -McpPort $mcpPort
+
 $cloudflaredProcesses = Get-Process -Name cloudflared -ErrorAction SilentlyContinue
 if ($cloudflaredProcesses) {
     $ids = ($cloudflaredProcesses | Select-Object -ExpandProperty Id) -join ", "
@@ -300,6 +427,9 @@ Test-ScheduledTaskState "$TaskPrefix-API" -RequireRunning
 Test-ScheduledTaskState "$TaskPrefix-MCP" -RequireRunning
 Test-ScheduledTaskState "$TaskPrefix-Tunnel" -RequireRunning
 Test-ScheduledTaskState "$TaskPrefix-Backup"
+
+Test-ListeningPort "local API listener" $apiPort
+Test-ListeningPort "local MCP listener" $mcpPort
 
 $backupRoot = Join-Path $RepoRoot "data\backups"
 if (-not (Test-Path -LiteralPath $backupRoot)) {
@@ -335,6 +465,10 @@ Test-JsonEndpoint "public MCP healthz" $McpHealthUrl -RequireOk
 
 Write-Host ""
 if ($failures -gt 0) {
+    Show-LogTail "API/scraper" (Join-Path $RepoRoot "scraper.log")
+    Show-LogTail "MCP" (Join-Path $RepoRoot "connector_http.log")
+    Show-LogTail "cloudflared" (Join-Path $RepoRoot "cloudflared_tunnel.log")
+    Write-Host ""
     Write-Host "diagnose-host: $failures failure(s), $warnings warning(s)"
     exit 1
 }
