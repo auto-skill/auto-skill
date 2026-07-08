@@ -106,13 +106,19 @@ python launch_check.py --base-url https://skills.avalahome.com --mcp-health-url 
 ```
 
 If either public hostname returns Cloudflare `1033` / HTTP `530`, the tunnel
-origin is unreachable. To apply the standard pull, task install/restart, local
-health waits, public launch check, and failure diagnosis in one pass, run this
-on the Windows host:
+origin is unreachable. To apply the standard pull, connector pull, task
+install/restart, local health waits, public launch check, and failure diagnosis
+in one pass, run this on the Windows host:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\recover-host.ps1
 ```
+
+`recover-host.ps1` updates both the backend checkout and the connector checkout
+used by `start_connector_http.ps1`. If the connector repo lives outside the
+auto-detected paths, pass `-ConnectorDir C:\path\to\auto-skill-connector`. If
+the host intentionally pins connector code during an incident, pass
+`-SkipConnectorPull`.
 
 If `/healthz` still serves the stale `{"ok":true,"db_reachable":true}` body
 after a normal recovery, an old Python process may still own port `8000`.

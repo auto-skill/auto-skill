@@ -1,5 +1,7 @@
 param(
     [string]$Branch = "main",
+    [string]$ConnectorBranch = "master",
+    [string]$ConnectorDir = "",
     [string]$BaseUrl = "https://skills.avalahome.com",
     [string]$McpHealthUrl = "https://mcp.avalahome.com/healthz",
     [string]$LocalApiUrl = "http://127.0.0.1:8000",
@@ -13,6 +15,7 @@ param(
     [switch]$SkipTaskInstall,
     [switch]$SkipBackupTask,
     [switch]$SkipLaunchCheck,
+    [switch]$SkipConnectorPull,
     [switch]$StopStalePortOwners
 )
 
@@ -96,6 +99,57 @@ function Stop-ScopedPortOwners {
     }
 }
 
+function Find-ConnectorDir {
+    $candidates = @()
+    if ($ConnectorDir) {
+        $candidates += $ConnectorDir
+    }
+    if ($env:AUTO_SKILL_CONNECTOR_DIR) {
+        $candidates += $env:AUTO_SKILL_CONNECTOR_DIR
+    }
+    $candidates += @(
+        (Join-Path $RepoRoot "..\auto-skill-connector"),
+        (Join-Path $RepoRoot "..\..\Skills"),
+        (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Skills")
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not $candidate) { continue }
+        $serverPath = Join-Path $candidate "mcp_server.py"
+        if (Test-Path -LiteralPath $serverPath) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    throw "Connector checkout not found. Set -ConnectorDir or AUTO_SKILL_CONNECTOR_DIR."
+}
+
+function Update-ConnectorCheckout {
+    param([string]$Path)
+
+    Push-Location -LiteralPath $Path
+    try {
+        $branch = (& git rev-parse --abbrev-ref HEAD).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not determine connector git branch in $Path"
+        }
+        if ($branch -ne $ConnectorBranch) {
+            throw "Connector checkout is on '$branch', expected '$ConnectorBranch'."
+        }
+        $dirty = (& git status --porcelain)
+        if ($dirty) {
+            if (-not $AllowDirty) {
+                throw "Connector checkout has uncommitted changes. Commit/stash them, or pass -AllowDirty after reviewing them."
+            }
+            Write-Host "Connector dirty check skipped because -AllowDirty was passed."
+        }
+        Invoke-Step "git fetch connector $ConnectorBranch" { git fetch origin $ConnectorBranch }
+        Invoke-Step "git pull connector --ff-only origin $ConnectorBranch" { git pull --ff-only origin $ConnectorBranch }
+    } finally {
+        Pop-Location
+    }
+}
+
 function Wait-JsonOk {
     param(
         [string]$Name,
@@ -130,6 +184,7 @@ function Wait-JsonOk {
 Write-Host "Auto-Skill host recovery"
 Write-Host "Repo: $RepoRoot"
 Write-Host "Branch: $Branch"
+Write-Host "Connector branch: $ConnectorBranch"
 Write-Host "Public URL: $BaseUrl"
 Write-Host "MCP health URL: $McpHealthUrl"
 
@@ -153,6 +208,16 @@ try {
         }
     } else {
         Write-Host "[PASS] scheduled tasks installed: $($serviceTasks -join ', ')"
+    }
+
+    $resolvedConnectorDir = Find-ConnectorDir
+    Write-Host "[PASS] connector checkout: $resolvedConnectorDir"
+    if (-not $SkipConnectorPull -and -not $SkipPull) {
+        Update-ConnectorCheckout $resolvedConnectorDir
+    } elseif ($SkipConnectorPull) {
+        Write-Host "Skipping connector pull because -SkipConnectorPull was passed."
+    } else {
+        Write-Host "Skipping connector pull because -SkipPull was passed."
     }
 
     if ($StopStalePortOwners) {
