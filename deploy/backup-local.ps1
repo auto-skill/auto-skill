@@ -47,6 +47,7 @@ if (-not $OutputDir) {
 
 $backupDir = Join-Path $OutputDir $stamp
 New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+$backupDir = (Resolve-Path -LiteralPath $backupDir).Path
 
 function Invoke-Native {
     param(
@@ -103,6 +104,17 @@ function Remove-ExpiredBackups {
     Write-Host "Backup retention: kept backups from the last $Days day(s); pruned $($expired.Count)."
 }
 
+function Get-BackupRelativePath {
+    param([string]$FullName)
+
+    $marker = "$stamp\"
+    $index = $FullName.LastIndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase)
+    if ($index -lt 0) {
+        throw "Could not derive backup-relative path for $FullName"
+    }
+    return $FullName.Substring($index + $marker.Length).Replace("\", "/")
+}
+
 if (-not (Test-Path -LiteralPath $DbPath)) {
     throw "Database not found: $DbPath"
 }
@@ -136,9 +148,11 @@ if ($PackContentBlobs) {
 
 $files = @()
 foreach ($item in Get-ChildItem -LiteralPath $backupDir -Recurse -File) {
+    $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName
     $files += [ordered]@{
-        path = $item.FullName.Substring($backupDir.Length + 1).Replace("\", "/")
+        path = Get-BackupRelativePath $item.FullName
         bytes = $item.Length
+        sha256 = $hash.Hash.ToLowerInvariant()
     }
 }
 

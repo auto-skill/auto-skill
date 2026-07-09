@@ -26,10 +26,11 @@ from datetime import datetime, timezone
 from math import ceil
 
 import httpx
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Header, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+import auth
 from embeddings import LibraryContent, build_embed_text, embed_text_hash, embed_texts
 import local_store as store
 from quality import CONFIG_VERSION, content_hash, rerank_candidates, tier_for_prompt
@@ -510,6 +511,45 @@ def _public_skill(row: dict | None) -> dict | None:
     }
 
 
+def _private_skill_as_row(skill: dict) -> dict:
+    """Shape a private_skills row like a public `skills` row so it can flow
+    through `_public_skill`/`_hint_candidates` unchanged. Private skills are
+    trusted (the caller owns them), so they get top-of-scale quality/rank."""
+    return {
+        "id": skill["id"],
+        "name": skill["name"],
+        "description": skill.get("description"),
+        "source": "private",
+        "url": None,
+        "content_hash": None,
+        "quality_status": "private",
+        "quality_score": 100,
+        "platforms": [],
+        "category": "private",
+        "risk_score": 0,
+        "rank": 1.0,
+        "route_score": 1.0,
+        "similarity": None,
+    }
+
+
+def _best_private_skill_match(query_text: str, private_skills: list[dict]) -> dict | None:
+    """Simple name/word-overlap match against the caller's own private skills
+    (never another user's) -- these never go through the public quality gate
+    or embedding index, so this is deliberately a cheap heuristic, not a
+    ranked search."""
+    query_words = set(re.findall(r"[a-z0-9]+", query_text.lower()))
+    if not query_words:
+        return None
+    best, best_overlap = None, 0
+    for skill in private_skills:
+        name_words = set(re.findall(r"[a-z0-9]+", skill["name"].lower()))
+        overlap = len(query_words & name_words)
+        if overlap > best_overlap:
+            best, best_overlap = skill, overlap
+    return best
+
+
 def _hint_candidates(results: list[dict], limit: int = 3) -> list[dict]:
     """Return a small content-free option set for medium-confidence routes."""
     candidates: list[dict] = []
@@ -591,9 +631,10 @@ async def get_content(hash_value: str):
 
 
 @router.post("/route")
-async def route(body: RouteRequest):
+async def route(body: RouteRequest, authorization: str | None = Header(None)):
     """Deterministic backend-owned route contract for connectors."""
     start = time.monotonic()
+    user = auth.user_from_authorization_header(authorization)
     query = (body.task or body.prompt or "").strip()
     if not query:
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -640,7 +681,18 @@ async def route(body: RouteRequest):
     content_ms = 0
     route_id = str(uuid.uuid4())
 
-    if tier == "full" and skill:
+    # A caller's own private skill submissions never enter the public quality
+    # gate or embedding index (see _best_private_skill_match) -- when one
+    # matches, it wins outright, since the caller uploaded it themselves.
+    private_match = store.list_private_skills(user["id"]) if user else []
+    private_match = _best_private_skill_match(query, private_match) if private_match else None
+
+    if private_match:
+        tier = "full"
+        skill = _public_skill(_private_skill_as_row(private_match))
+        content = private_match["content"]
+        skill["content_hash"] = content_hash(content)
+    elif tier == "full" and skill:
         content_start = time.monotonic()
         library = LibraryContent()
         text = library.get(skill.get("url") or "")
@@ -711,6 +763,7 @@ async def route(body: RouteRequest):
             "client": body.client[:80],
             "client_version": body.client_version[:80],
             "id": route_id,
+            "user_id": user["id"] if user else None,
             "query_hash": _query_hash(query),
             "query_chars": len(query),
             "tier": tier,
@@ -747,21 +800,37 @@ async def route(body: RouteRequest):
 
 
 @router.get("/find-semantic")
-async def find_semantic(q: str, limit: int = 8, gate: bool = True):
+async def find_semantic(q: str, limit: int = 8, gate: bool = True, authorization: str | None = Header(None)):
     """Hybrid-ranked results, plus a `tier` a caller can act on directly:
       "full" -> inject the top result's whole skill content
       "hint" -> surface just its name/url, several candidates are plausible
       "none" -> nothing cleared the bar; do not inject anything
     With gate=true (default), a "none" tier also empties `results` - pass
-    gate=false for debugging/eval of raw rankings regardless of tier."""
+    gate=false for debugging/eval of raw rankings regardless of tier.
+    An authenticated caller's own private skills (never another user's) are
+    matched by name and, when relevant, prepended to `results`."""
     async with httpx.AsyncClient() as client:
         results = await retrieve_skills(client, q, limit)
     tier = injection_tier(q, results)
+
+    # A private match is the caller's own trusted content (never another
+    # user's) -- it's prepended regardless of the public similarity gate
+    # below, same as /route bypassing the public quality gate for it.
+    user = auth.user_from_authorization_header(authorization)
+    private_row = None
+    if user:
+        private_match = _best_private_skill_match(q, store.list_private_skills(user["id"]))
+        if private_match:
+            private_row = _private_skill_as_row(private_match)
+            tier = "full"
+
     if gate and tier == "none":
         return {"query": q, "results": [], "tier": tier, "gated": True,
                 "message": f"No result cleared the similarity floor ({MIN_SIMILARITY}).",
                 "score_debug": _score_debug(results, tier),
             "config_version": CONFIG_VERSION}
+    if private_row:
+        results = [private_row] + results
     return {"query": q, "results": results, "tier": tier,
             "score_debug": _score_debug(results, tier),
             "config_version": CONFIG_VERSION}

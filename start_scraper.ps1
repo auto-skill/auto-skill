@@ -33,6 +33,22 @@ if (-not $env:SEARXNG_URL) {
 }
 Write-Log "SEARXNG_URL=$env:SEARXNG_URL; AUTO_START_SCRAPER=$env:AUTO_START_SCRAPER; LOCAL_DB_PATH=$env:LOCAL_DB_PATH"
 
+# Google/GitHub OAuth apps backing account login (auth.py) -- set these as
+# persistent user/machine env vars (setx) so they survive across restarts of
+# this supervisor. Unset means that provider's /auth/{provider}/start 503s
+# instead of breaking anything else. See deploy/.env.example for the redirect
+# URIs each provider's OAuth app must be registered with.
+if ($env:GOOGLE_CLIENT_ID) {
+    Write-Log "Google OAuth login is configured"
+} else {
+    Write-Log "GOOGLE_CLIENT_ID is not set; Google login will 503"
+}
+if ($env:GITHUB_CLIENT_ID) {
+    Write-Log "GitHub OAuth login is configured"
+} else {
+    Write-Log "GITHUB_CLIENT_ID is not set; GitHub login will 503"
+}
+
 while ($true) {
     Write-Log "starting python scraper.py"
     python "$PSScriptRoot\scraper.py" *>> $logPath

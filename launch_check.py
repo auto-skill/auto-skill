@@ -21,6 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 from urllib import error, request
+from urllib.parse import urlsplit
 
 
 REQUIRED_ENV = (
@@ -121,6 +122,47 @@ def check_env(reporter: Reporter, env_file: Path) -> None:
         reporter.pass_("env", f"{env_file} has Cloudflare/R2 values")
     if _is_blank(values.get("GITHUB_TOKEN")):
         reporter.warn("env", "GITHUB_TOKEN is blank; scraper discovery will be sharply limited")
+    _check_dashboard_origins(reporter, values)
+
+
+def _check_dashboard_origins(reporter: Reporter, values: dict[str, str]) -> None:
+    raw = values.get("AUTO_SKILL_DASHBOARD_ORIGINS", os.getenv("AUTO_SKILL_DASHBOARD_ORIGINS", ""))
+    if _is_blank(raw):
+        reporter.warn(
+            "dashboard origins",
+            "AUTO_SKILL_DASHBOARD_ORIGINS is blank; dashboard OAuth will use code defaults, "
+            "but production hosts should pin exact dashboard origins",
+        )
+        return
+
+    origins = [value.strip() for value in raw.split(",") if value.strip()]
+    if not origins:
+        reporter.fail("dashboard origins", "expected one or more comma-separated origins")
+        return
+
+    invalid: list[str] = []
+    for origin in origins:
+        parsed = urlsplit(origin)
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+            or "*" in origin
+        ):
+            invalid.append(origin)
+            continue
+        if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"}:
+            invalid.append(origin)
+
+    if invalid:
+        reporter.fail("dashboard origins", "invalid AUTO_SKILL_DASHBOARD_ORIGINS: " + ", ".join(invalid))
+    else:
+        reporter.pass_("dashboard origins", f"{len(origins)} allowed origin(s)")
 
 
 def check_db(reporter: Reporter, db_path: Path, min_total: int, min_active: int, min_embedded: int) -> None:
@@ -188,6 +230,48 @@ def _route_metrics(body: dict) -> dict:
     return ((body.get("score_debug") or {}).get("metrics") or {})
 
 
+def _bad_gateway_detail(status: int, body: dict) -> str | None:
+    if status != 502:
+        return None
+    title = str(body.get("title") or body.get("error") or body.get("_text") or "")
+    if "bad gateway" in title.lower():
+        return (
+            "Cloudflare reached the tunnel but the API origin returned Bad Gateway; "
+            "run deploy\\recover-host.ps1 on the host, then inspect deploy\\diagnose-host.ps1 if recovery fails"
+        )
+    return (
+        "HTTP 502 from the public edge or API origin; run deploy\\recover-host.ps1 on the host, "
+        "then inspect deploy\\diagnose-host.ps1 if recovery fails"
+    )
+
+
+def _empty_runtime_detail(body: dict) -> str | None:
+    counts = {
+        "total_skills": int(body.get("total_skills") or 0),
+        "active_skills": int(body.get("active_skills") or 0),
+        "embedded_skills": int(body.get("embedded_skills") or 0),
+    }
+    if body.get("ok") is False and all(value == 0 for value in counts.values()):
+        return (
+            "origin reachable but runtime DB/library is empty or not mounted "
+            f"({', '.join(f'{key}={value}' for key, value in counts.items())}); "
+            "seed or restore local_skills.db and skills_library with deploy\\seed_runtime.py, "
+            "then run backfill_quality.py and reindex.py or the worker"
+        )
+    return None
+
+
+def _no_candidate_route_detail(body: dict) -> str | None:
+    candidates = body.get("candidates")
+    if body.get("tier") == "none" and isinstance(candidates, list) and not candidates:
+        reason = ((body.get("score_debug") or {}).get("reason") or "no candidates")
+        return (
+            f"route returned no candidates ({reason}); runtime DB/library may be empty, "
+            "unembedded, or not mounted"
+        )
+    return None
+
+
 def _check_scraper_summary(reporter: Reporter, name: str, summary: dict) -> None:
     if not summary:
         reporter.warn(name, "scraper summary missing from readiness payload")
@@ -240,6 +324,61 @@ def _check_route_budget(
         )
 
 
+def _check_route_metrics_summary(
+    reporter: Reporter,
+    name: str,
+    body: dict,
+    max_route_latency_ms: int,
+    max_route_skill_find_ms: int,
+    max_route_injected_tokens: int,
+    max_route_response_tokens: int,
+) -> None:
+    if not body or body.get("ok") is not True:
+        reporter.warn(name, f"route metrics payload missing ok=true: {body}")
+        return
+
+    total = int(body.get("total") or 0)
+    budgets = body.get("budgets") if isinstance(body.get("budgets"), dict) else {}
+    expected_budgets = {
+        "latency_ms": max_route_latency_ms,
+        "skill_find_ms": max_route_skill_find_ms,
+        "injected_tokens": max_route_injected_tokens,
+        "response_tokens": max_route_response_tokens,
+    }
+    mismatched = [
+        f"{key}={budgets.get(key)} expected={expected}"
+        for key, expected in expected_budgets.items()
+        if int(budgets.get(key) or 0) not in {0, expected}
+    ]
+    if mismatched:
+        reporter.warn(name, f"route metrics used unexpected budget(s): {', '.join(mismatched)}")
+
+    if total <= 0:
+        reporter.warn(name, "no recent route analytics yet; run local route probes before launch")
+        return
+
+    breaches = body.get("budget_breaches") if isinstance(body.get("budget_breaches"), dict) else {}
+    breach_count = int(breaches.get("any") or 0)
+    if breach_count:
+        reporter.fail(
+            name,
+            "recent route budget breach(es): "
+            f"any={breach_count}, latency_ms={int(breaches.get('latency_ms') or 0)}, "
+            f"skill_find_ms={int(breaches.get('skill_find_ms') or 0)}, "
+            f"injected_tokens={int(breaches.get('injected_tokens') or 0)}, "
+            f"response_tokens={int(breaches.get('response_tokens') or 0)}",
+        )
+        return
+
+    reporter.pass_(
+        name,
+        f"total={total}, p95_latency_ms={int(body.get('p95_latency_ms') or 0)}, "
+        f"p95_skill_find_ms={int(body.get('p95_skill_find_ms') or 0)}, "
+        f"p95_injected_tokens={int(body.get('p95_injected_tokens') or 0)}, "
+        f"p95_response_tokens={int(body.get('p95_response_tokens') or 0)}",
+    )
+
+
 def check_http(
     reporter: Reporter,
     base_url: str,
@@ -264,14 +403,16 @@ def check_http(
             f"body={json.dumps(body, sort_keys=True)[:220]}",
         )
     else:
-        reporter.fail("http healthz", f"status={status}, body={body}")
+        detail = _bad_gateway_detail(status, body)
+        reporter.fail("http healthz", detail or f"status={status}, body={body}")
 
     status, body = _json_request(base_url, "GET", "/readyz")
     if status == 200 and body.get("ok") is True and body.get("active_skills", 0) > 0 and body.get("embedded_skills", 0) > 0:
         reporter.pass_("http readyz", json.dumps(body, sort_keys=True)[:220])
         _check_scraper_summary(reporter, "readyz scraper", body.get("scraper") or {})
     else:
-        reporter.fail("http readyz", f"status={status}, body={body}")
+        detail = _bad_gateway_detail(status, body) or _empty_runtime_detail(body)
+        reporter.fail("http readyz", detail or f"status={status}, body={body}")
 
     status, body = _json_request(base_url, "GET", "/status")
     if status == 200:
@@ -302,13 +443,15 @@ def check_http(
             max_route_response_tokens,
         )
     else:
-        reporter.fail("route direct", f"status={status}, body={json.dumps(body, sort_keys=True)[:500]}")
+        detail = _bad_gateway_detail(status, body) or _no_candidate_route_detail(body)
+        reporter.fail("route direct", detail or f"status={status}, body={json.dumps(body, sort_keys=True)[:500]}")
 
     status, body = _json_request(base_url, "POST", "/route", {"task": trap_task})
     skill = body.get("skill") or {}
     skill_blob = f"{skill.get('name', '')} {skill.get('url', '')} {skill.get('source_url', '')}".lower()
     if status != 200:
-        reporter.fail("route trap", f"status={status}, body={body}")
+        detail = _bad_gateway_detail(status, body)
+        reporter.fail("route trap", detail or f"status={status}, body={body}")
     elif body.get("tier") == "full" and "landingi" in skill_blob:
         reporter.fail("route trap", "generic landing-page prompt full-routed to Landingi")
     else:
@@ -322,6 +465,22 @@ def check_http(
             max_route_injected_tokens,
             max_route_response_tokens,
         )
+
+    status, body = _json_request(base_url, "GET", "/route-metrics")
+    if status == 200:
+        _check_route_metrics_summary(
+            reporter,
+            "route metrics",
+            body,
+            max_route_latency_ms,
+            max_route_skill_find_ms,
+            max_route_injected_tokens,
+            max_route_response_tokens,
+        )
+    elif status == 403:
+        reporter.pass_("route metrics privacy", "/route-metrics is local-only through the public guard")
+    else:
+        reporter.warn("route metrics", f"/route-metrics unavailable: status={status}, body={body}")
 
     guarded_paths = [
         ("POST", "/scrape", {}),
@@ -371,7 +530,8 @@ def check_mcp_health(reporter: Reporter, health_url: str) -> None:
     if status == 200 and body.get("ok") is True:
         reporter.pass_("mcp health", json.dumps(body, sort_keys=True)[:220])
     else:
-        reporter.fail("mcp health", f"status={status}, body={body}")
+        detail = _bad_gateway_detail(status, body)
+        reporter.fail("mcp health", detail or f"status={status}, body={body}")
 
 
 def check_docker(reporter: Reporter, env_file: Path) -> None:

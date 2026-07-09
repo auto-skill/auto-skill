@@ -10,6 +10,7 @@ services:
       AUTO_START_EMBEDDER: "0"
       ENABLE_OLLAMA_CHAT: "0"
       STALE_SCRAPE_RUN_SECONDS: ${STALE_SCRAPE_RUN_SECONDS:-7200}
+      AUTO_SKILL_DASHBOARD_ORIGINS: ${AUTO_SKILL_DASHBOARD_ORIGINS:-https://auto-skill.com,https://www.auto-skill.com}
     volumes:
       - ../data:/data
       - ../skills_library:/app/skills_library

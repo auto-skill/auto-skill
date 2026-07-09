@@ -20,7 +20,13 @@ from scraper import SCRAPE_INTERVAL_SECONDS, run_scrape, start_new_scrape_run
 async def run_once() -> None:
     run_id = await start_new_scrape_run()
     print(f"{datetime.now(timezone.utc).isoformat()} worker scrape {run_id} started", flush=True)
-    await run_scrape(run_id)
+    scrape_ok = await run_scrape(run_id)
+    if not scrape_ok:
+        print(
+            f"{datetime.now(timezone.utc).isoformat()} worker scrape {run_id} failed; skipping embed drain",
+            flush=True,
+        )
+        return
     async with httpx.AsyncClient() as client:
         embedded = await embed_missing_skills(client)
     print(

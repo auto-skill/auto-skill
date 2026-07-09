@@ -3,6 +3,16 @@
 __pycache__
 *.pyc
 *.log
+data
+data/
+backups
+backups/
+content_blobs
+content_blobs/
+eval-results
+eval-results/
+restore-drill
+restore-drill/
 local_skills.db
 local_skills.db-wal
 local_skills.db-shm

@@ -14,6 +14,16 @@ param(
     [switch]$SkipTests,
     [switch]$SkipTaskInstall,
     [switch]$SkipBackupTask,
+    [switch]$RunBackfill,
+    [switch]$RunReindex,
+    [switch]$ApplyScrapeCleanup,
+    [switch]$SkipBackup,
+    [switch]$UploadBackupR2,
+    [string]$SeedBackupDir = "",
+    [string]$SeedBackupZip = "",
+    [string]$SeedDbPath = "",
+    [string]$SeedLibraryDir = "",
+    [switch]$ForceSeedRuntime,
     [switch]$SkipLaunchCheck,
     [switch]$SkipConnectorPull,
     [switch]$StopStalePortOwners
@@ -165,7 +175,16 @@ function Wait-JsonOk {
         try {
             $body = Invoke-RestMethod -Uri $Url -Headers @{ Accept = "application/json" } -TimeoutSec 5
             if ($RequireOk -and $body.ok -ne $true) {
-                $lastError = "response ok was not true: $($body | ConvertTo-Json -Depth 6 -Compress)"
+                $totalSkills = if ($null -ne $body.total_skills) { [int]$body.total_skills } else { -1 }
+                $activeSkills = if ($null -ne $body.active_skills) { [int]$body.active_skills } else { -1 }
+                $embeddedSkills = if ($null -ne $body.embedded_skills) { [int]$body.embedded_skills } else { -1 }
+                if ($totalSkills -eq 0 -and $activeSkills -eq 0 -and $embeddedSkills -eq 0) {
+                    $lastError = "runtime DB/library is empty or not mounted; rerun with -SeedBackupDir, -SeedBackupZip, or -SeedDbPath/-SeedLibraryDir and -ForceSeedRuntime"
+                } elseif ($totalSkills -gt 0 -and $activeSkills -gt 0 -and $embeddedSkills -eq 0) {
+                    $lastError = "runtime has skills but no embeddings; after API recovery run update-host.ps1 -RunReindex -RestartTasks"
+                } else {
+                    $lastError = "response ok was not true: $($body | ConvertTo-Json -Depth 6 -Compress)"
+                }
             } elseif ($RequireService -and $body.service -ne "auto-skill-api") {
                 $lastError = "expected service=auto-skill-api: $($body | ConvertTo-Json -Depth 6 -Compress)"
             } else {
@@ -242,6 +261,16 @@ try {
     if ($SkipPull) { $updateArgs += "-SkipPull" }
     if ($SkipInstall) { $updateArgs += "-SkipInstall" }
     if ($SkipTests) { $updateArgs += "-SkipTests" }
+    if ($RunBackfill) { $updateArgs += "-RunBackfill" }
+    if ($RunReindex) { $updateArgs += "-RunReindex" }
+    if ($ApplyScrapeCleanup) { $updateArgs += "-ApplyScrapeCleanup" }
+    if ($SkipBackup) { $updateArgs += "-SkipBackup" }
+    if ($UploadBackupR2) { $updateArgs += "-UploadBackupR2" }
+    if ($SeedBackupDir) { $updateArgs += @("-SeedBackupDir", $SeedBackupDir) }
+    if ($SeedBackupZip) { $updateArgs += @("-SeedBackupZip", $SeedBackupZip) }
+    if ($SeedDbPath) { $updateArgs += @("-SeedDbPath", $SeedDbPath) }
+    if ($SeedLibraryDir) { $updateArgs += @("-SeedLibraryDir", $SeedLibraryDir) }
+    if ($ForceSeedRuntime) { $updateArgs += "-ForceSeedRuntime" }
 
     Invoke-Step "update host and restart service tasks" {
         powershell @updateArgs

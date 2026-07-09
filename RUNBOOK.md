@@ -4,6 +4,9 @@
 
 1. Back up the current `local_skills.db` and `skills_library/`:
    `.\deploy\backup-local.ps1 -PackContentBlobs`.
+   New backup manifests include SHA-256 hashes; verify the backup before
+   relying on it:
+   `python deploy\verify_backup.py data\backups\<timestamp>`.
 2. Run `python backfill_quality.py`.
 3. Run `python -m unittest discover`.
 4. Start the API.
@@ -61,11 +64,14 @@ public `/healthz` but blocked those newer route/readiness endpoints.
 On the host:
 
 ```powershell
-.\deploy\backup-local.ps1 -PackContentBlobs
 git pull --ff-only origin main
 .\deploy\update-host.ps1 -SkipPull -RestartTasks
 ```
 
+`update-host.ps1` creates a local SQLite/library/content-blob backup and runs
+`verify_backup.py` before pulling, restarting, or running public checks. Use
+`-SkipBackup` only after confirming a fresh verified backup already exists.
+Add `-UploadBackupR2` when R2 credentials and the AWS CLI are available.
 `-RestartTasks` restarts `AutoSkill-API`, `AutoSkill-MCP`, and
 `AutoSkill-Tunnel` after tests and maintenance steps, then runs the public
 launch check. If legacy rows have not been quality-gated yet, run the backfill
@@ -102,9 +108,64 @@ python reindex.py
 Finally prove the public service is serving the new code:
 
 ```powershell
+python launch_readiness.py
 python launch_status.py
+python launch_status.py --profile canonical
 python launch_check.py --base-url https://skills.avalahome.com --mcp-health-url https://mcp.avalahome.com/healthz --skip-env --skip-docker
 ```
+
+`launch_readiness.py` is the quick "are we ready?" answer. It checks local
+seed data, alpha public status, canonical public status, and whether the repo
+has uncommitted launch changes. It is intentionally a summary; use
+`launch_check.py` for the full gate once the summary is green.
+
+Before replacing runtime data on a host, validate the candidate seed artifact:
+
+```powershell
+python launch_readiness.py --skip-live --skip-local-seed --skip-git --seed-backup-dir C:\path\to\backup
+python launch_readiness.py --skip-live --skip-local-seed --skip-git --seed-backup-zip C:\path\to\backup.zip
+python launch_readiness.py --skip-live --skip-local-seed --skip-git --seed-db-path C:\path\to\local_skills.db --seed-library-dir C:\path\to\skills_library
+```
+
+The candidate checks verify backup manifests/hashes, SQLite integrity, nonzero
+total/active/embedded skill counts, and indexed markdown skill files.
+
+If another laptop has the populated runtime data, create a transfer packet from
+that machine:
+
+```powershell
+.\deploy\export-seed-packet.ps1 -DbPath C:\path\to\local_skills.db -LibraryDir C:\path\to\skills_library
+```
+
+The helper creates a manifest-backed backup under `data\seed-packets\`, verifies
+the manifest and hashes, runs the candidate readiness checks, and writes a zip
+next to the backup directory for transfer. It also validates the produced zip
+with the same candidate checks. After copying and extracting the zip on the
+host, validate it again with:
+
+```powershell
+python launch_readiness.py --skip-live --skip-local-seed --skip-git --seed-backup-dir C:\path\to\extracted\20260708T200000Z
+```
+
+Then pass it to `recover-host.ps1 -SeedBackupDir`.
+Alternatively, pass the copied zip directly to the recovery path:
+
+```powershell
+.\deploy\recover-host.ps1 -SeedBackupZip C:\path\to\20260708T200000Z.zip -ForceSeedRuntime
+```
+
+The `alpha` launch-status profile checks the current emergency hostnames:
+`skills.avalahome.com` and `mcp.avalahome.com`. The `canonical` profile checks
+the production-facing hostnames: `api.auto-skill.com` and `mcp.auto-skill.com`.
+Do not call the hosted product production-ready until the canonical profile
+resolves in DNS and passes the same health, readiness, route, and MCP checks as
+the alpha profile.
+
+When `launch_check.py` is run against a local base URL, it also reads
+`/route-metrics` and fails if recent routes breached the launch budgets for
+latency, skill-find time, injected tokens, or response tokens. When it is run
+through Cloudflare, `/route-metrics` should return `403` because analytics are
+local-only.
 
 If either public hostname returns Cloudflare `1033` / HTTP `530`, the tunnel
 origin is unreachable. To apply the standard pull, connector pull, task
@@ -121,6 +182,40 @@ auto-detected paths, pass `-ConnectorDir C:\path\to\auto-skill-connector`. If
 the host intentionally pins connector code during an incident, pass
 `-SkipConnectorPull`.
 
+If `launch_status.py` reports `[NOT_READY]` with an empty skill DB or route
+probes returning no candidates, the public origin is reachable but the runtime
+state is missing. Seed or restore `local_skills.db` and `skills_library/`, run
+`python backfill_quality.py`, start the worker or run `python reindex.py`, then
+rerun `python launch_check.py`.
+
+If the same host alternates between public `502 Bad Gateway` and empty
+`/readyz` responses, treat it as one incident: the API origin is unstable and
+the runtime state still needs seeding. Run `recover-host.ps1` with the seed
+flags below so recovery, task restart, and runtime replacement happen in one
+controlled pass.
+
+To fold seeding into the controlled Windows host update/recovery path, pass a
+verified backup directory:
+
+```powershell
+.\deploy\update-host.ps1 -SkipPull -RestartTasks -SeedBackupDir .\data\backups\20260708T200000Z -ForceSeedRuntime
+```
+
+or loose DB/library artifacts:
+
+```powershell
+.\deploy\recover-host.ps1 -SeedDbPath C:\path\to\local_skills.db -SeedLibraryDir C:\path\to\skills_library -ForceSeedRuntime
+```
+
+The integrated seed path requires `-RestartTasks`, stops `AutoSkill-API` before
+replacing runtime data, restarts service tasks afterward, and intentionally
+does not combine with `-RunReindex`. If embeddings are missing after seeding,
+restart the API first, then run `.\deploy\update-host.ps1 -SkipPull -SkipTests
+-SkipBackup -RunReindex -RestartTasks`.
+`recover-host.ps1` also passes through `-RunBackfill`, `-RunReindex`, and
+`-ApplyScrapeCleanup` to `update-host.ps1`; do not pass `-RunReindex` in the
+same recovery command as seed replacement.
+
 If `/healthz` still serves the stale `{"ok":true,"db_reachable":true}` body
 after a normal recovery, an old Python process may still own port `8000`.
 Inspect `.\deploy\diagnose-host.ps1`; if the listener command line is an
@@ -136,6 +231,12 @@ If you only want a read-only failure packet, run:
 ```powershell
 .\deploy\diagnose-host.ps1
 ```
+
+The diagnostic checks more than process liveness. It inspects the local
+`local_skills.db` and `skills_library/` seed runtime, failing when total,
+active, embedded, indexed, or markdown skill counts are zero. If this fails,
+seed or restore with `python deploy\seed_runtime.py` before chasing Cloudflare
+or routing bugs.
 
 For `AutoSkill-API`, `AutoSkill-MCP`, and `AutoSkill-Tunnel`, the diagnostic
 reports Task Scheduler state, last run time, next run time, and last result. A
@@ -211,6 +312,19 @@ python deploy\compose_preflight.py
 docker compose --env-file deploy\.env -f deploy\docker-compose.yml up -d --build
 ```
 
+Set `AUTO_SKILL_DASHBOARD_ORIGINS` in `deploy\.env` to the exact production
+dashboard origins that are allowed to receive OAuth token fragments, for
+example `https://auto-skill.com,https://www.auto-skill.com`. Do not include
+wildcards or temporary preview domains on the production host.
+
+Or run the guarded launcher, which runs preflight first, starts compose, waits
+for local `/healthz` and `/readyz`, then runs `launch_check.py` against the
+local API:
+
+```powershell
+python deploy\compose_launch.py
+```
+
 The compose file is intentionally small. It keeps SQLite, Cloudflare Tunnel,
 and Litestream. It does not introduce Postgres, Redis, queues, Kubernetes, or a
 new vector server.
@@ -223,9 +337,25 @@ The compose file uses bind mounts instead of opaque Docker volumes:
 Seed a VPS by copying the current DB and library into those paths before the
 first `docker compose up`.
 
+To seed from loose local artifacts and validate that the result is non-empty
+and embedded:
+
+```powershell
+python deploy\seed_runtime.py --db-path C:\path\to\local_skills.db --library-dir C:\path\to\skills_library
+```
+
+To seed from a verified backup directory:
+
+```powershell
+python deploy\seed_runtime.py --backup-dir .\data\backups\20260708T200000Z --force
+```
+
 `python deploy\compose_preflight.py` fails when launch-critical values are
-missing from `deploy\.env`, when the seeded DB/library files are absent, or
-when `docker compose config` cannot parse the stack. Use
+missing from `deploy\.env`, when the seeded DB/library files are absent,
+empty, unreadable, unembedded, or when `docker compose config` cannot parse the
+stack. By default it requires at least one total, active, and embedded skill in
+`data\local_skills.db`, plus at least one indexed markdown file in
+`skills_library/`. Use
 `--skip-seed-checks --skip-docker` only for CI or local config review before a
 real host exists.
 
@@ -334,23 +464,29 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs --tail=5
 
 Monthly restore drill:
 
-1. Restore `local_skills.db` from Litestream into a scratch directory.
-2. Restore a recent `skills_library` archive.
-3. Copy them into `data/local_skills.db` and `skills_library/`.
-4. Start the API.
-5. Run `python -m unittest discover -s tests`.
-6. Probe `/route` with the platform trap and a direct-hit query.
+1. Download or create a timestamped backup directory with `manifest.json`.
+2. Verify and restore it into a scratch directory.
+3. Start the API against the scratch DB/library.
+4. Run `python -m unittest discover -s tests`.
+5. Probe `/route` with the platform trap and a direct-hit query.
 
-On Windows, after downloading restored artifacts:
+On Windows, after downloading a backup directory:
 
 ```powershell
-.\deploy\restore-local.ps1 -DbPath .\restored\local_skills.db -LibraryArchive .\restored\skills_library.tgz
+.\deploy\restore-local.ps1 -BackupDir .\data\backups\20260708T200000Z
 ```
 
 For a scratch restore drill that does not replace the live repo paths:
 
 ```powershell
-.\deploy\restore-local.ps1 -DbPath .\restored\local_skills.db -LibraryArchive .\restored\skills_library.tgz -TargetDataDir .\restore-drill\data -TargetLibraryDir .\restore-drill\skills_library
+.\deploy\restore-local.ps1 -BackupDir .\data\backups\20260708T200000Z -TargetDataDir .\restore-drill\data -TargetLibraryDir .\restore-drill\skills_library
+```
+
+If you only have loose restored artifacts instead of a manifest-backed backup
+directory, verify them manually before using the older explicit path form:
+
+```powershell
+.\deploy\restore-local.ps1 -DbPath .\restored\local_skills.db -LibraryArchive .\restored\skills_library.tgz
 ```
 
 ## Health And Readiness
@@ -369,6 +505,10 @@ an alpha launch blocker even if search can still serve from the existing DB.
 The compose setup runs scraping in the `worker` service only. Keep
 `AUTO_START_SCRAPER=0` on the public API so accidental API restarts do not
 start extra scrapes.
+
+If a scrape run is marked `error`, the worker skips the embedding drain for
+that cycle and waits for the next interval. Fix the scrape failure first
+instead of treating missing embeddings as the primary problem.
 
 Before a worker starts a new run it marks `running` rows older than
 `STALE_SCRAPE_RUN_SECONDS` as `stale`, then refuses to start if a fresh

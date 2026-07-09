@@ -128,6 +128,40 @@ function Test-RouteBudget {
     }
 }
 
+function Test-LocalRouteMetrics {
+    $metricsUrl = "$($LocalApiUrl.TrimEnd('/'))/route-metrics"
+    try {
+        $body = Invoke-RestMethod -Uri $metricsUrl -Headers @{ Accept = "application/json" } -TimeoutSec 10
+    } catch {
+        Warn "local route metrics" $_.Exception.Message
+        return
+    }
+
+    $total = Get-MetricInt $body @("total")
+    $breaches = Get-JsonValue $body "budget_breaches"
+    $breachAny = Get-MetricInt $breaches @("any")
+    $latencyBreaches = Get-MetricInt $breaches @("latency_ms")
+    $skillFindBreaches = Get-MetricInt $breaches @("skill_find_ms")
+    $injectedBreaches = Get-MetricInt $breaches @("injected_tokens")
+    $responseBreaches = Get-MetricInt $breaches @("response_tokens")
+
+    if ($total -le 0) {
+        Warn "local route metrics" "no recent route events yet; route probes should populate this before launch"
+        return
+    }
+
+    if ($breachAny -gt 0) {
+        Fail "local route metrics" "recent budget breaches: any=$breachAny, latency_ms=$latencyBreaches, skill_find_ms=$skillFindBreaches, injected_tokens=$injectedBreaches, response_tokens=$responseBreaches"
+        return
+    }
+
+    $p95Latency = Get-MetricInt $body @("p95_latency_ms")
+    $p95SkillFind = Get-MetricInt $body @("p95_skill_find_ms")
+    $p95Injected = Get-MetricInt $body @("p95_injected_tokens")
+    $p95Response = Get-MetricInt $body @("p95_response_tokens")
+    Pass "local route metrics" "total=$total, p95_latency_ms=$p95Latency, p95_skill_find_ms=$p95SkillFind, p95_injected_tokens=$p95Injected, p95_response_tokens=$p95Response"
+}
+
 function Invoke-RouteProbe {
     param(
         [string]$Name,
@@ -201,6 +235,88 @@ function Test-PathPresent {
         Pass $Name $item.FullName
     } else {
         Fail $Name "missing $Path"
+    }
+}
+
+function Test-SeedRuntime {
+    param(
+        [string]$DbPath,
+        [string]$LibraryDir
+    )
+
+    if (-not $DbPath -or -not (Test-Path -LiteralPath $DbPath)) {
+        Fail "seed runtime" "local_skills.db is missing; seed or restore with deploy\seed_runtime.py"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $LibraryDir)) {
+        Fail "seed runtime" "skills_library is missing at $LibraryDir; seed or restore with deploy\seed_runtime.py"
+        return
+    }
+
+    $code = @'
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+library_dir = Path(sys.argv[2])
+summary = {
+    "db_path": str(db_path),
+    "library_dir": str(library_dir),
+    "total": 0,
+    "active": 0,
+    "embedded": 0,
+    "index_entries": 0,
+    "markdown_files": 0,
+}
+conn = sqlite3.connect(db_path)
+try:
+    row = conn.execute(
+        """
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN COALESCE(quality_status, 'active') = 'active' THEN 1 ELSE 0 END) AS active,
+          SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS embedded
+        FROM skills
+        """
+    ).fetchone()
+    summary["total"] = int(row[0] or 0)
+    summary["active"] = int(row[1] or 0)
+    summary["embedded"] = int(row[2] or 0)
+finally:
+    conn.close()
+
+index_path = library_dir / "index.json"
+if index_path.exists():
+    index = json.loads(index_path.read_text(encoding="utf-8-sig"))
+    if isinstance(index, list):
+        summary["index_entries"] = len(index)
+files_dir = library_dir / "files"
+if files_dir.exists():
+    summary["markdown_files"] = len(list(files_dir.glob("*.md")))
+print(json.dumps(summary, sort_keys=True))
+'@
+
+    try {
+        $raw = & python -c $code $DbPath $LibraryDir 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Fail "seed runtime" "could not inspect DB/library: $($raw -join ' ')"
+            return
+        }
+        $summary = ($raw | Select-Object -Last 1) | ConvertFrom-Json
+    } catch {
+        Fail "seed runtime" "could not inspect DB/library: $($_.Exception.Message)"
+        return
+    }
+
+    $detail = "total=$($summary.total), active=$($summary.active), embedded=$($summary.embedded), index_entries=$($summary.index_entries), markdown_files=$($summary.markdown_files)"
+    if ([int]$summary.total -lt 1 -or [int]$summary.active -lt 1 -or [int]$summary.index_entries -lt 1 -or [int]$summary.markdown_files -lt 1) {
+        Fail "seed runtime" "$detail; runtime DB/library is empty or not mounted. Seed or restore with python deploy\seed_runtime.py"
+    } elseif ([int]$summary.embedded -lt 1) {
+        Fail "seed runtime" "$detail; DB has skills but no embeddings. Run python reindex.py or start the worker"
+    } else {
+        Pass "seed runtime" $detail
     }
 }
 
@@ -436,7 +552,9 @@ if ($freeGb -lt $MinFreeDiskGb) {
     Pass "disk free" "drive=$($repoDrive.Name), free_gb=$freeGb"
 }
 
-Test-PathPresent "skills library index" (Join-Path $RepoRoot "skills_library\index.json")
+$libraryDir = Join-Path $RepoRoot "skills_library"
+Test-PathPresent "skills library index" (Join-Path $libraryDir "index.json")
+Test-SeedRuntime -DbPath $dbPath -LibraryDir $libraryDir
 
 $cloudflaredExe = "C:\Program Files (x86)\cloudflared\cloudflared.exe"
 $cloudflaredConfig = Join-Path $env:USERPROFILE ".cloudflared\config.yml"
@@ -500,6 +618,7 @@ Test-JsonEndpoint "local API healthz" "$($LocalApiUrl.TrimEnd('/'))/healthz" -Re
 Test-JsonEndpoint "local API readyz" "$($LocalApiUrl.TrimEnd('/'))/readyz" -RequireOk
 Test-LocalRouteDirect
 Test-LocalRouteTrap
+Test-LocalRouteMetrics
 Test-JsonEndpoint "local MCP healthz" $LocalMcpHealthUrl -RequireOk
 Test-JsonEndpoint "public API healthz" "$($BaseUrl.TrimEnd('/'))/healthz" -RequireOk -RequireService
 Test-JsonEndpoint "public MCP healthz" $McpHealthUrl -RequireOk

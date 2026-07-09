@@ -12,6 +12,14 @@ param(
     [switch]$RestartTasks,
     [string]$TaskPrefix = "AutoSkill",
     [int]$RestartWaitSeconds = 10,
+    [switch]$SkipBackup,
+    [switch]$UploadBackupR2,
+    [int]$BackupRetentionDays = 14,
+    [string]$SeedBackupDir = "",
+    [string]$SeedBackupZip = "",
+    [string]$SeedDbPath = "",
+    [string]$SeedLibraryDir = "",
+    [switch]$ForceSeedRuntime,
     [switch]$SkipLaunchCheck
 )
 
@@ -60,6 +68,75 @@ function Restart-HostTask {
     Start-ScheduledTask -TaskName $TaskName
 }
 
+function Stop-HostTaskIfRunning {
+    param([string]$TaskName)
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task) {
+        Write-Host "Scheduled task '$TaskName' is not installed; nothing to stop before seed."
+        return
+    }
+    if ($task.State -eq "Running") {
+        Write-Host "Stopping $TaskName before replacing runtime data"
+        Stop-ScheduledTask -TaskName $TaskName
+        Start-Sleep -Seconds 3
+    }
+}
+
+function Get-LatestBackupDir {
+    $backupRoot = Join-Path $RepoRoot "data\backups"
+    if (-not (Test-Path -LiteralPath $backupRoot)) {
+        throw "Backup directory missing after backup: $backupRoot"
+    }
+    $manifest = Get-ChildItem -LiteralPath $backupRoot -Recurse -Filter manifest.json -File |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    if (-not $manifest) {
+        throw "No backup manifest found under $backupRoot"
+    }
+    return $manifest.Directory.FullName
+}
+
+function Invoke-SeedRuntime {
+    $hasBackupSeed = -not [string]::IsNullOrWhiteSpace($SeedBackupDir)
+    $hasBackupZipSeed = -not [string]::IsNullOrWhiteSpace($SeedBackupZip)
+    $hasLooseSeed = (-not [string]::IsNullOrWhiteSpace($SeedDbPath)) -or (-not [string]::IsNullOrWhiteSpace($SeedLibraryDir))
+    if (-not $hasBackupSeed -and -not $hasBackupZipSeed -and -not $hasLooseSeed) {
+        Write-Host ""
+        Write-Host "Skipping runtime seed. If /readyz reports zero skills, rerun with -SeedBackupDir, -SeedBackupZip, or -SeedDbPath/-SeedLibraryDir."
+        return
+    }
+    if (-not $RestartTasks) {
+        throw "Runtime seeding requires -RestartTasks so the API is stopped before replacement and restarted after."
+    }
+    if ($RunReindex) {
+        throw "Do not combine runtime seeding with -RunReindex. Seed/restart first, then run reindex against the live local API if needed."
+    }
+    $seedModeCount = @($hasBackupSeed, $hasBackupZipSeed, $hasLooseSeed) | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count
+    if ($seedModeCount -gt 1) {
+        throw "Use exactly one seed mode: -SeedBackupDir, -SeedBackupZip, or -SeedDbPath/-SeedLibraryDir."
+    }
+    if ($hasLooseSeed -and ([string]::IsNullOrWhiteSpace($SeedDbPath) -or [string]::IsNullOrWhiteSpace($SeedLibraryDir))) {
+        throw "Use -SeedDbPath and -SeedLibraryDir together."
+    }
+
+    Stop-HostTaskIfRunning "$TaskPrefix-API"
+    Invoke-Native "seed runtime data" {
+        $args = @("deploy\seed_runtime.py")
+        if ($hasBackupSeed) {
+            $args += @("--backup-dir", $SeedBackupDir)
+        } elseif ($hasBackupZipSeed) {
+            $args += @("--backup-zip", $SeedBackupZip)
+        } else {
+            $args += @("--db-path", $SeedDbPath, "--library-dir", $SeedLibraryDir)
+        }
+        if ($ForceSeedRuntime) {
+            $args += "--force"
+        }
+        python @args
+    }
+}
+
 Write-Host "Auto-Skill host update"
 Write-Host "Repo: $RepoRoot"
 Write-Host "Target branch: $Branch"
@@ -74,6 +151,23 @@ if ($LASTEXITCODE -ne 0) {
 }
 if ($currentBranch -ne $Branch) {
     throw "Host checkout is on '$currentBranch', expected '$Branch'. Switch branches manually before running this script."
+}
+
+if (-not $SkipBackup) {
+    Invoke-Native "local backup before update" {
+        $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".\deploy\backup-local.ps1", "-PackContentBlobs", "-RetentionDays", "$BackupRetentionDays")
+        if ($UploadBackupR2) {
+            $args += "-UploadR2"
+        }
+        powershell @args
+    }
+    $latestBackupDir = Get-LatestBackupDir
+    Invoke-Native "verify latest backup" {
+        python deploy\verify_backup.py $latestBackupDir
+    }
+} else {
+    Write-Host ""
+    Write-Host "Skipping pre-update backup because -SkipBackup was passed."
 }
 
 if (-not $SkipPull) {
@@ -109,6 +203,8 @@ if (-not $SkipTests) {
         [scriptblock]::Create((Get-Content -Raw start_scraper.ps1)) | Out-Null
     }
 }
+
+Invoke-SeedRuntime
 
 Invoke-Native "scrape run cleanup dry run" { python cleanup_scrape_runs.py }
 if ($ApplyScrapeCleanup) {

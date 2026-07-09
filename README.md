@@ -34,6 +34,12 @@ exists so the scraper, worker, and recommender can share the SQLite store over
 loopback; public clients should use `/route`, `/find-semantic`, and
 `/content/{content_hash}`.
 
+Dashboard OAuth redirects are allowlisted. Set
+`AUTO_SKILL_DASHBOARD_ORIGINS` to a comma-separated list of dashboard origins
+on the host, for example
+`https://auto-skill.com,https://www.auto-skill.com`. Local development origins
+are allowed by default when the variable is not set.
+
 `/readyz` and `/route-metrics` include `vector_index` stats so search latency
 can be correlated with active corpus size, valid embeddings, and embedding
 matrix cache state before moving to a new vector backend. `/readyz` also
@@ -145,6 +151,12 @@ before deploys to create a timestamped SQLite/library/blob backup under
 default. Add `-UploadR2` when R2 credentials are available. Use
 `.\deploy\install-windows-tasks.ps1` to keep the service loops and daily local
 backup registered in Task Scheduler.
+Backup manifests include file sizes and SHA-256 hashes. Verify a backup before
+restore or after an R2 download:
+
+```powershell
+python deploy\verify_backup.py data\backups\20260708T200000Z
+```
 
 For cheaper content-addressed storage, build gzip blobs keyed by normalized
 content hash:

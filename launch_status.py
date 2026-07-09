@@ -5,6 +5,7 @@ quick answer to "is the public API/MCP live, and what should we do next?"
 
 Run:
   python launch_status.py
+  python launch_status.py --profile canonical
   python launch_status.py --json
 """
 
@@ -17,8 +18,15 @@ from dataclasses import dataclass, asdict
 from urllib import error, request
 
 
-DEFAULT_BASE_URL = "https://skills.avalahome.com"
-DEFAULT_MCP_HEALTH_URL = "https://mcp.avalahome.com/healthz"
+ALPHA_BASE_URL = "https://skills.avalahome.com"
+ALPHA_MCP_HEALTH_URL = "https://mcp.avalahome.com/healthz"
+CANONICAL_BASE_URL = "https://api.auto-skill.com"
+CANONICAL_MCP_HEALTH_URL = "https://mcp.auto-skill.com/healthz"
+
+PROFILES = {
+    "alpha": (ALPHA_BASE_URL, ALPHA_MCP_HEALTH_URL),
+    "canonical": (CANONICAL_BASE_URL, CANONICAL_MCP_HEALTH_URL),
+}
 
 
 @dataclass
@@ -64,6 +72,11 @@ def classify(status: int | None, body: dict) -> tuple[str, str]:
         return "down", "Cloudflare tunnel cannot reach the origin"
     if status == 530:
         return "down", "HTTP 530 from edge"
+    if status == 502:
+        title = str(body.get("title") or body.get("error") or "").lower()
+        if "bad gateway" in title:
+            return "down", "Cloudflare reached the tunnel but the API origin returned Bad Gateway"
+        return "down", "HTTP 502 from public edge or origin"
     if status == 403:
         return "blocked", "request reached an origin but was forbidden"
     if status == 200:
@@ -71,8 +84,15 @@ def classify(status: int | None, body: dict) -> tuple[str, str]:
         if body.get("ok") is True:
             return "ok", "ok=true"
         if tier:
+            if tier == "none" and not body.get("candidates"):
+                return "not_ready", "route found no candidates"
             return "ok", f"route tier={tier}"
         return "ok", "HTTP 200"
+    if status == 503 and body.get("ok") is False:
+        counts = [int(body.get(key) or 0) for key in ("total_skills", "active_skills", "embedded_skills")]
+        if counts == [0, 0, 0]:
+            return "not_ready", "origin is reachable but the skill DB is empty or not mounted"
+        return "not_ready", "origin is reachable but readiness failed"
     if 500 <= status <= 599:
         return "down", f"server error {status}"
     if 400 <= status <= 499:
@@ -106,11 +126,29 @@ def run_status(base_url: str, mcp_health_url: str) -> list[Probe]:
 def next_action(probes: list[Probe]) -> str:
     states = {item.state for item in probes}
     details = " ".join(item.detail.lower() for item in probes)
+    if "getaddrinfo failed" in details or "name or service not known" in details:
+        return (
+            "At least one public hostname does not resolve. Fix DNS/Cloudflare "
+            "for the API and MCP domains before calling this production-ready."
+        )
     if any(item.status == 530 for item in probes) or "cloudflare tunnel" in details:
         return (
             "Public edge is down at the tunnel/origin layer. On the host, run "
             "deploy\\recover-host.ps1; if this keeps recurring, move to the VPS compose path."
         )
+    if any(item.status == 502 for item in probes) or "bad gateway" in details:
+        return (
+            "Public edge reaches Cloudflare, but the API origin is unhealthy or not accepting tunnel traffic. "
+            "On the host, run deploy\\recover-host.ps1; if it fails, inspect deploy\\diagnose-host.ps1."
+        )
+    if "not_ready" in states:
+        if "skill db is empty" in details or "no candidates" in details:
+            return (
+                "Public origin is reachable but the runtime DB/library is empty or not mounted. "
+                "Seed or restore local_skills.db and skills_library, run backfill/reindex or the worker, "
+                "then rerun launch_check.py."
+            )
+        return "Public origin is reachable but readiness failed. Run deploy\\diagnose-host.ps1 on the host."
     if "blocked" in states:
         return (
             "Traffic reached an origin but at least one route is blocked. Pull latest backend, "
@@ -123,19 +161,29 @@ def next_action(probes: list[Probe]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Probe public Auto-Skill alpha status.")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--mcp-health-url", default=DEFAULT_MCP_HEALTH_URL)
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILES),
+        default="alpha",
+        help="host profile to probe when explicit URLs are not supplied",
+    )
+    parser.add_argument("--base-url")
+    parser.add_argument("--mcp-health-url")
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    probes = run_status(args.base_url, args.mcp_health_url)
+    profile_base_url, profile_mcp_health_url = PROFILES[args.profile]
+    base_url = args.base_url or profile_base_url
+    mcp_health_url = args.mcp_health_url or profile_mcp_health_url
+    probes = run_status(base_url, mcp_health_url)
     action = next_action(probes)
     status = {
-        "base_url": args.base_url,
-        "mcp_health_url": args.mcp_health_url,
+        "profile": args.profile,
+        "base_url": base_url,
+        "mcp_health_url": mcp_health_url,
         "probes": [asdict(item) for item in probes],
         "next_action": action,
     }
